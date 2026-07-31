@@ -1,0 +1,99 @@
+# ==========================
+# Dataset configuration
+# ==========================
+dataset:
+  name: "microalgae_dataset_v1"
+  raw_dir: "data/raw"
+  processed_dir: "data/processed"
+  features_dir: "data/features"
+  combined_features_dir: "data/combined_features"
+  splits_dir: "data/splits"
+
+  image_format: [".png",".jpg"]
+  grayscale: true
+  normalize: false
+
+  classes: ["m_aeruginosa", "n_fruticosa", "n_palea"]
+
+# ==========================
+# Preprocessing
+# ==========================
+preprocessing:
+  resize:
+    enabled: true
+    target_size: [512, 512]
+    padding_color: "black"   # black | mean
+
+  filter:
+    enabled: true
+    method: "bilateral"
+    bilateral:
+      params: [40, 1, 25]   # diameter, sigma_color, sigma_space
+
+  threshold:
+    enabled: false
+    method: "adaptive"
+
+  segment:
+    enabled: false
+    method: "sobel"     # "sobel", "canny"
+
+# ==========================
+# Feature extraction
+# ==========================
+features:
+  feature_list: ["efd", "gabor", "geom", "glcm", "hu", "lbp", "pc"]
+  type: "glcm"    # glcm | lbp | hu
+
+  glcm:
+    distances: [1, 2, 3]
+    angles: [0, 0.785, 1.571, 2.356]
+    levels: 256
+    symmetric: true
+    normalized: true
+
+  lbp:
+    radius: 2
+    n_points: 16
+    method: "uniform"
+
+  hu:
+    log_transform: true
+
+# ==========================
+# Classification
+# ==========================
+classifier:
+  model: "svm"   # svm | rf | knn
+
+  svm:
+    kernel: "rbf"
+    C: 1.0
+    gamma: "scale"
+
+  random_forest:
+    n_estimators: 200
+    max_depth: null
+    random_state: 42
+
+  knn:
+    n_neighbors: 5
+    weights: "distance"
+
+# ==========================
+# Experiment setup
+# ==========================
+experiment:
+  pipeline_name: "grayscale_glcm_baseline"
+  cross_validation: "5-fold"
+  random_seed: 42
+  save_features: true
+  save_model: true
+  results_dir: "results"
+
+# ==========================
+# Logging
+# ==========================
+logging:
+  verbose: true
+  save_intermediate_images: false
