@@ -1,6 +1,6 @@
 import cv2
 
-def grayscale(image):
+def to_grayscale(image):
     if image is None:
         raise ValueError("Input image is None")
 

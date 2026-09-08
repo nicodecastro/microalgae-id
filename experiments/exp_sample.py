@@ -12,14 +12,12 @@ from pathlib import Path
 import pandas as pd
 import matplotlib.pyplot as plt
 
-# from preprocessing import resize_with_padding, grayscale, filter, threshold, segment
-# from preprocessing import resize_with_padding, to_grayscale, bilateral_filter
 from features import geometric_features, hu_moments_features, lbp_features, glcm_features, efd_features, gabor_features # phase_congruency_features
-from utils.io import load_image_paths, load_labels, save_features, save_image, load_image
-from utils.metrics import classification_metrics, summarize_cv
 from utils.config import load_config  # YAML loader
 from classifiers.svm_model import run_svm
 from classifiers.knn_model import run_knn
+
+from preprocessing import preprocess_image
 
 def run_experiment(config_path="config.yaml"):
     # -----------------------------
@@ -34,6 +32,43 @@ def run_experiment(config_path="config.yaml"):
     feature_list = config["features"]["feature_list"]
     feature_data = dict.fromkeys(feature_list)
 
+    # -----------------------------
+    # Test Preprocessing Pipeline
+    # -----------------------------
+    for subfolder_name in class_subfolders:
+        subfolder_path = os.path.join(dataset_dir, subfolder_name)
+        for image_name in os.listdir(subfolder_path):
+
+            image_path = os.path.join(subfolder_path, image_name)
+
+            image = cv2.imread(image_path)
+
+            resized_orig_image = preprocess_image(
+                image,
+                resize=(256, 256),
+                grayscale=True,
+            )
+
+            processed = preprocess_image(
+                image,
+                resize=(256,256),
+                grayscale=True,
+                denoise="bilateral",
+                threshold="adaptive",
+                edge="sobel"
+            )
+            
+            success_path = Path(
+                f"data/success/preprocessing/{subfolder_name}"
+            )
+
+            success_path.mkdir(parents=True, exist_ok=True)
+
+            cv2.imwrite(
+                str(success_path / image_name),
+                cv2.hconcat([resized_orig_image, processed])
+            )
+              
     # -----------------------------
     # Load images and extract features
     # -----------------------------
@@ -54,47 +89,47 @@ def run_experiment(config_path="config.yaml"):
     # print("Extracting EFD features...")
     # efd_features.extract_features(dataset_dir, class_subfolders, features_dir, save_images=False)
     # gabor
-    print("Extracting gabor features...")
-    gabor_features.extract_features(dataset_dir, class_subfolders, features_dir, save_images=False)
+    # print("Extracting gabor features...")
+    # gabor_features.extract_features(dataset_dir, class_subfolders, features_dir, save_images=False)
     # pc
     
     # -----------------------------
     # Combine features
     # -----------------------------
-    print("Combining features...")
+    # print("Combining features...")
     # check if combined features dir exists
-    output_file = "Combined_features.csv"
-    combined_features_path = Path(combined_features_dir).joinpath(output_file)
-    combined_features_path.parent.mkdir(parents=True, exist_ok=True)
+    # output_file = "Combined_features.csv"
+    # combined_features_path = Path(combined_features_dir).joinpath(output_file)
+    # combined_features_path.parent.mkdir(parents=True, exist_ok=True)
     
-    features_path = Path(features_dir)
-    dfs = []
-    class_col = None
-    for file in features_path.iterdir():  # iterate over all feature csv files
-        if file.is_file():
-            df = pd.read_csv(file)
+    # features_path = Path(features_dir)
+    # dfs = []
+    # class_col = None
+    # for file in features_path.iterdir():  # iterate over all feature csv files
+        # if file.is_file():
+            # df = pd.read_csv(file)
 
             # save class column once
-            if class_col is None:
-                class_col = df.iloc[:, -1]
+            # if class_col is None:
+                # class_col = df.iloc[:, -1]
 
             # store feature columns
-            dfs.append(df.iloc[:, :-1])
+            # dfs.append(df.iloc[:, :-1])
 
     # combine all features horizontally
-    combined = pd.concat(dfs, axis=1)
+    # combined = pd.concat(dfs, axis=1)
 
     # add class column back
-    combined["Class"] = class_col
+    # combined["Class"] = class_col
 
-    combined.to_csv(combined_features_path, index=False)
-    print(f"Combined CSV saved to {combined_features_path}")
+    #combined.to_csv(combined_features_path, index=False)
+    #print(f"Combined CSV saved to {combined_features_path}")
 
     # -----------------------------
     # Run classifier
     # -----------------------------
     #run_svm(combined)
-    run_knn(combined)
+    #run_knn(combined)
 
     # # -----------------------------
     # # Cross-validation

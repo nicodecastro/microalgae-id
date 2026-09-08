@@ -28,7 +28,7 @@ import cv2
 from preprocessing import resize_with_padding
  
  
-def segment_image(image: np.ndarray, dilation_size: int = 4):
+def segment_image(image: np.ndarray, dilation_size: int = 4, save_images: bool = False):
     """
     Parameters
     ----------
@@ -127,8 +127,8 @@ def segment_image(image: np.ndarray, dilation_size: int = 4):
     #    and apply mask only.
     # ------------------------------------------------------------------
 
-    # Keep full-size mask (NO cropping)
-    mask = mask_full
+    # Remove morphology padding
+    mask = mask_full[pad:-pad, pad:-pad]
 
     # Apply mask to original grayscale image (fixed 256x256 canvas)
     image_cut = gray * mask.astype(np.float64)
@@ -158,6 +158,11 @@ def segment_image(image: np.ndarray, dilation_size: int = 4):
     #    MATLAB: edge(mask)  →  Sobel edges on the uint8 mask
     # ------------------------------------------------------------------
     image_contour = filters.sobel(mask.astype(float)) > 0
+ 
+    if save_images:
+        mask = (mask * 255).astype(np.uint8)
+        image_cut = (image_cut * 255).astype(np.uint8)
+        image_contour = (image_contour * 255).astype(np.uint8)
  
     return mask, image_cut, image_contour
  
