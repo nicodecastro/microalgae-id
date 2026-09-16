@@ -249,14 +249,6 @@ def extract_features(dataset_dir, class_subfolders, features_dir, save_images=Fa
     param_path = Path(__file__).parent.parent / 'utils' / 'default_param.py'
     lg = LogGabor(str(param_path))
 
-    # recompute scales 
-    lg.sf_0 = .5 * (1 - 1/lg.n_levels) / np.logspace(
-        0, lg.n_levels-1, 
-        lg.n_levels, 
-        base=lg.pe.base_levels, 
-        endpoint=False
-    )
-    
     # Initialize an empty list to store the feature data
     feature_data = []
     labels_data = []
