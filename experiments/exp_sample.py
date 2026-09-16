@@ -19,7 +19,35 @@ from classifiers.knn_model import run_knn
 
 from preprocessing import preprocess_image
 
-def run_experiment(config_path="config.yaml"):
+def _preprocess_from_config(image, config):
+    dataset_cfg = config["dataset"]
+    preprocessing_cfg = config["preprocessing"]
+
+    resize_cfg = preprocessing_cfg["resize"]
+    resize = tuple(resize_cfg["target_size"]) if resize_cfg["enabled"] else None
+
+    filter_cfg = preprocessing_cfg["filter"]
+    denoise = filter_cfg["method"] if filter_cfg["enabled"] else None
+    bilateral_params = tuple(filter_cfg["bilateral"]["params"])
+
+    threshold_cfg = preprocessing_cfg["threshold"]
+    threshold = threshold_cfg["method"] if threshold_cfg["enabled"] else None
+
+    edge_cfg = preprocessing_cfg["segment"]
+    edge = edge_cfg["method"] if edge_cfg["enabled"] else None
+
+    return preprocess_image(
+        image,
+        resize=resize,
+        grayscale=dataset_cfg["grayscale"],
+        denoise=denoise,
+        bilateral_params=bilateral_params,
+        threshold=threshold,
+        edge=edge,
+    )
+
+
+def run_experiment(config_path="utils/config.yaml"):
     # -----------------------------
     # Load config
     # -----------------------------
@@ -31,43 +59,41 @@ def run_experiment(config_path="config.yaml"):
     class_subfolders = config["dataset"]["classes"]
     feature_list = config["features"]["feature_list"]
     feature_data = dict.fromkeys(feature_list)
+    image_formats = {extension.lower() for extension in config["dataset"]["image_format"]}
+    logging_cfg = config["logging"]
+    preview_dir = Path(config["experiment"]["results_dir"]) / "preprocessing"
 
     # -----------------------------
-    # Test Preprocessing Pipeline
+    # Optional preprocessing preview, controlled by logging.save_intermediate_images
     # -----------------------------
     for subfolder_name in class_subfolders:
         subfolder_path = os.path.join(dataset_dir, subfolder_name)
         for image_name in os.listdir(subfolder_path):
+            if Path(image_name).suffix.lower() not in image_formats:
+                continue
 
             image_path = os.path.join(subfolder_path, image_name)
 
             image = cv2.imread(image_path)
+            if image is None:
+                raise ValueError(f"Failed to load image: {image_path}")
 
-            resized_orig_image = preprocess_image(
-                image,
-                resize=(256, 256),
-                grayscale=True,
-            )
+            processed = _preprocess_from_config(image, config)
 
-            processed = preprocess_image(
-                image,
-                resize=(256,256),
-                grayscale=True,
-                denoise="bilateral",
-                threshold="adaptive",
-                edge="sobel"
-            )
-            
-            success_path = Path(
-                f"data/success/preprocessing/{subfolder_name}"
-            )
-
-            success_path.mkdir(parents=True, exist_ok=True)
-
-            cv2.imwrite(
-                str(success_path / image_name),
-                cv2.hconcat([resized_orig_image, processed])
-            )
+            if logging_cfg["save_intermediate_images"]:
+                resized_original = preprocess_image(
+                    image,
+                    resize=(
+                        tuple(config["preprocessing"]["resize"]["target_size"])
+                        if config["preprocessing"]["resize"]["enabled"]
+                        else None
+                    ),
+                    grayscale=config["dataset"]["grayscale"],
+                )
+                output_path = preview_dir / subfolder_name / image_name
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                cv2.imwrite(str(output_path), cv2.hconcat([resized_original, processed]))
+                #cv2.imwrite(str(output_path), processed)
               
     # -----------------------------
     # Load images and extract features
@@ -158,4 +184,4 @@ def run_experiment(config_path="config.yaml"):
 
 
 if __name__ == "__main__":
-    run_experiment("config.yaml")
+    run_experiment("utils/config.yaml")
