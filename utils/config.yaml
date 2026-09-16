@@ -4,6 +4,7 @@
 dataset:
   raw_dir: "data/raw"
   features_dir: "data/features"
+  combined_features_dir: "data/combined_features"
   image_format: [".png",".jpg"]
   grayscale: true
   classes: ["m_aeruginosa", "n_fruticosa", "n_palea"]
