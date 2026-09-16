@@ -211,7 +211,7 @@ def second_order_features(subband, levels=16):
 
 def collapse_orientations(C):
     # C: (H, W, 6, 4)
-    return np.mean(np.abs(C), axis=2)  # (H, W, 4)
+    return np.sum(np.abs(C), axis=2)  # (H, W, 4)
     
 def extract_gabor_features(image, image_name, subfolder_name, save_images, lg):
     # Step 1: Log-Gabor responses
