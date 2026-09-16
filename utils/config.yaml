@@ -14,28 +14,37 @@ dataset:
 preprocessing:
   resize:
     enabled: true
-    target_size: [512, 512]
+    target_size: [256, 256]
     padding_color: "black"   # black | mean
 
   filter:
     enabled: true
     method: "bilateral"
     bilateral:
-      params: [40, 1, 25]   # diameter, sigma_color, sigma_space
+      params: [7, 25, 7]   # diameter, sigma_color, sigma_space
 
   threshold:
-    enabled: false
+    enabled: true
     method: "adaptive"
 
   segment:
-    enabled: false
-    method: "sobel"     # "sobel", "canny"
+    enabled: true
+    method: "canny"     # "sobel", "canny"
 
 # ==========================
 # Feature extraction
 # ==========================
 features:
   feature_list: ["efd", "gabor", "geom", "glcm", "hu", "lbp", "pc"]
+
+# ==========================
+# Experiment setup
+# ==========================
+experiment:
+  cross_validation: "5-fold"
+  # save_features: true
+  # save_model: true
+  results_dir: "results"
 
 # ==========================
 # Logging
