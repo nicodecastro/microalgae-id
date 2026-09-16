@@ -249,8 +249,6 @@ def extract_features(dataset_dir, class_subfolders, features_dir, save_images=Fa
     param_path = Path(__file__).parent.parent / 'utils' / 'default_param.py'
     lg = LogGabor(str(param_path))
 
-    # force 4 scales since library using dynamic scales based on image size
-    lg.n_levels = 4
     # recompute scales 
     lg.sf_0 = .5 * (1 - 1/lg.n_levels) / np.logspace(
         0, lg.n_levels-1, 
@@ -265,6 +263,7 @@ def extract_features(dataset_dir, class_subfolders, features_dir, save_images=Fa
 
     feature_names = []
 
+    # 13 features
     first_order_names = [
         "mean", "mode", "min", "max", "variance",
         "range", "entropy", "q1", "q2", "q3",
