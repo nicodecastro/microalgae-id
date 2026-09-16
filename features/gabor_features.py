@@ -213,12 +213,21 @@ def collapse_orientations(C):
     # C: (H, W, 6, 4)
     return np.sum(np.abs(C), axis=2)  # (H, W, 4)
     
-def extract_gabor_features(image, image_name, subfolder_name, save_images, lg):
+def extract_gabor_features(image, mask, image_name, subfolder_name, save_images, lg):
     # Step 1: Log-Gabor responses
     C = lg.linear_pyramid(image)  # (H, W, 6, 4)
 
     # Step 2: collapse orientations → 4 bands
     G = collapse_orientations(C)  # (H, W, 4)
+
+    mask = np.asarray(mask, dtype=bool)
+    if mask.shape != G.shape[:2]:
+        raise ValueError(
+            f"Mask shape {mask.shape} does not match response shape {G.shape[:2]}."
+        )
+
+    # Retain only pixels belonging to the segmented diatom in every scale band.
+    G *= mask[:, :, np.newaxis]
 
     features = []
 
@@ -322,7 +331,9 @@ def extract_features(dataset_dir, class_subfolders, features_dir, save_images=Fa
             masked_image = image * mask.astype(image.dtype)
             
             # Extract the features from the image
-            features = extract_gabor_features(masked_image, image_name, subfolder_name, save_images, lg)
+            features = extract_gabor_features(
+                masked_image, mask, image_name, subfolder_name, save_images, lg
+            )
             feature_data.append(features)
             labels_data.append(subfolder_name)
             
