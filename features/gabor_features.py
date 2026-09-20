@@ -2,15 +2,38 @@ from pathlib import Path
 import cv2
 import numpy as np
 from scipy.stats import skew, kurtosis, mode
-from skimage.feature import graycomatrix
 import pandas as pd
-from LogGabor import LogGabor
 import os
 from preprocessing import segment_image, resize_with_padding
 
+def _foreground(subband, mask):
+    """Validate a band and ROI, keeping genuine zero-valued foreground pixels."""
+    img = np.asarray(subband, dtype=np.float64)
+    if img.ndim != 2 or img.size == 0:
+        raise ValueError("subband must be a nonempty 2-D array")
+    if mask is None:
+        roi = np.ones(img.shape, dtype=bool)
+    else:
+        roi = np.asarray(mask)
+        if roi.shape != img.shape or roi.dtype.kind not in "buif" or not np.isfinite(roi).all():
+            raise ValueError("mask must be a finite numeric/boolean array matching the subband")
+        roi = roi != 0
+    if not roi.any():
+        raise ValueError("Cannot extract Log-Gabor statistics from an empty foreground mask")
+    foreground = img[roi]
+    if not np.isfinite(foreground).all():
+        raise ValueError("Foreground responses must be finite")
+    return img, roi, foreground
+
+
 # Compute first order statistics for each sub-band
-def first_order_features(subband, bins=256):
-    flat = subband.ravel().astype(np.float64)
+def first_order_features(subband, bins=256, *, mask=None):
+    """Compute statistics only over the ROI (all pixels when mask is omitted).
+
+    Constant/single-pixel ROIs use zero skewness and excess kurtosis as a
+    finite convention, since these standardized moments are undefined there.
+    """
+    _, _, flat = _foreground(subband, mask)
 
     # Basic stats
     mean = np.mean(flat)
@@ -20,10 +43,10 @@ def first_order_features(subband, bins=256):
     variance = np.var(flat)
     value_range = maximum - minimum
 
-    # Histogram-based entropy (RECOMMENDED)
-    hist, _ = np.histogram(flat, bins=bins, density=True)
-    hist = hist + 1e-10  # avoid log(0)
-    entropy = -np.sum(hist * np.log2(hist))
+    # Entropy requires probabilities, not histogram probability densities.
+    hist, _ = np.histogram(flat, bins=bins)
+    probabilities = hist[hist > 0] / hist.sum()
+    entropy = -np.sum(probabilities * np.log2(probabilities))
 
     # Quartiles
     q1 = np.percentile(flat, 25)
@@ -32,8 +55,8 @@ def first_order_features(subband, bins=256):
     iqr = q3 - q1
 
     # Shape statistics
-    asymmetry = skew(flat)
-    kurt = kurtosis(flat)
+    asymmetry = skew(flat) if variance > 0 else 0.0
+    kurt = kurtosis(flat) if variance > 0 else 0.0
 
     return [
         mean,
@@ -52,25 +75,46 @@ def first_order_features(subband, bins=256):
     ]
     
 # Compute GLCMs for each sub-band (Bueno et al., 2017 as defined in Sanchez et al., 2019)
-def compute_glcm_matrices(subband, levels=16):
+def compute_glcm_matrices(subband, levels=16, *, mask=None):
+    """Build symmetric, normalized GLCMs using pairs with BOTH endpoints in ROI.
 
-    img = subband.astype(np.float64)
-
-    img = img - img.min()
-    img = img / (img.max() + 1e-10)
-    img = (img * (levels - 1)).astype(np.uint8)
+    Quantization uses only the foreground range; constant foreground maps to
+    level zero. Spatial offsets match graycomatrix's distances/angles. An
+    offset with no valid pairs returns an all-zero matrix (not a distribution).
+    """
+    if isinstance(levels, (bool, np.bool_)) or not isinstance(levels, (int, np.integer)) or levels < 2:
+        raise ValueError("levels must be an integer >= 2")
+    img, roi, foreground = _foreground(subband, mask)
+    quantized = np.zeros(img.shape, dtype=np.int64)
+    minimum, maximum = foreground.min(), foreground.max()
+    if maximum > minimum:
+        scaled = (foreground - minimum) / (maximum - minimum)
+        quantized[roi] = np.floor(np.clip(scaled, 0, 1) * (levels - 1)).astype(np.int64)
 
     distances = [1, 3, 5] # 1, 3, 5 pixels
     angles = [0, np.pi/4, np.pi/2, 3*np.pi/4] # 0, 45, 90, 135
 
-    glcms = graycomatrix(
-        img,
-        distances=distances,
-        angles=angles,
-        levels=levels,
-        symmetric=True,
-        normed=True
-    )
+    glcms = np.zeros((levels, levels, len(distances), len(angles)), dtype=np.float64)
+    height, width = img.shape
+    for d, distance in enumerate(distances):
+        for a, angle in enumerate(angles):
+            dy = int(np.rint(distance * np.sin(angle)))
+            dx = int(np.rint(distance * np.cos(angle)))
+            if abs(dy) >= height or abs(dx) >= width:
+                continue
+            # Aligned slices preserve the original spatial relationships and
+            # exclude out-of-bounds neighbors without wrapping image borders.
+            y0, y1 = max(0, -dy), min(height, height - dy)
+            x0, x1 = max(0, -dx), min(width, width - dx)
+            source = np.s_[y0:y1, x0:x1]
+            neighbor = np.s_[y0 + dy:y1 + dy, x0 + dx:x1 + dx]
+            valid = roi[source] & roi[neighbor]
+            if not valid.any():
+                continue
+            pair_ids = quantized[source][valid] * levels + quantized[neighbor][valid]
+            counts = np.bincount(pair_ids, minlength=levels * levels).reshape(levels, levels)
+            counts = counts + counts.T
+            glcms[:, :, d, a] = counts / counts.sum()
 
     return glcms
 
@@ -119,9 +163,10 @@ def entropy_measures(c, cx, cy):
     return HXY1, HXY2
 
 # # Compute features from each GLCM of the sub-bands (Bueno et al., 2017 as defined in Sanchez et al., 2019)
-def second_order_features(subband, levels=16):
+def second_order_features(subband, levels=16, *, mask=None):
+    """Return 19 descriptors per offset; offsets without valid pairs use 19 zeros."""
 
-    glcms = compute_glcm_matrices(subband, levels)
+    glcms = compute_glcm_matrices(subband, levels, mask=mask)
 
     features = []
 
@@ -130,6 +175,9 @@ def second_order_features(subband, levels=16):
         for a in range(glcms.shape[3]):  # 4 angles
 
             c = glcms[:, :, d, a]
+            if not c.any():
+                features.extend([0.0] * 19)
+                continue
 
             H = c.shape[0]
             eps = 1e-10
@@ -214,6 +262,8 @@ def collapse_orientations(C):
     return np.sum(np.abs(C), axis=2)  # (H, W, 4)
     
 def extract_gabor_features(image, mask, image_name, subfolder_name, save_images, lg):
+    # Reject failed segmentation before doing the expensive filter transform.
+    _, mask, _ = _foreground(image, mask)
     # Step 1: Log-Gabor responses
     C = lg.linear_pyramid(image)  # (H, W, 6, 4)
 
@@ -226,8 +276,7 @@ def extract_gabor_features(image, mask, image_name, subfolder_name, save_images,
             f"Mask shape {mask.shape} does not match response shape {G.shape[:2]}."
         )
 
-    # Retain only pixels belonging to the segmented diatom in every scale band.
-    G *= mask[:, :, np.newaxis]
+    # Pass the ROI explicitly: zeroing background alone would still count it.
 
     features = []
 
@@ -236,8 +285,8 @@ def extract_gabor_features(image, mask, image_name, subfolder_name, save_images,
 
         subband = G[:, :, s]
 
-        f1 = first_order_features(subband)
-        f2 = second_order_features(subband)
+        f1 = first_order_features(subband, mask=mask)
+        f2 = second_order_features(subband, mask=mask)
 
         # FIRST ORDER (13)
         features.extend(f1)
@@ -255,6 +304,8 @@ def extract_gabor_features(image, mask, image_name, subfolder_name, save_images,
     return np.array(features)
   
 def extract_features(dataset_dir, class_subfolders, features_dir, save_images=False):
+    from LogGabor import LogGabor
+
     param_path = Path(__file__).parent.parent / 'utils' / 'default_param.py'
     lg = LogGabor(str(param_path))
 
@@ -270,11 +321,6 @@ def extract_features(dataset_dir, class_subfolders, features_dir, save_images=Fa
         "range", "entropy", "q1", "q2", "q3",
         "iqr", "asymmetry", "kurtosis"
     ]
-
-    # FIRST-ORDER (13 × 4 scales)
-    for s in range(1, 5):
-        for name in first_order_names:
-            feature_names.append(f"S{s}_1st_{name}")
 
     # SECOND-ORDER (19 features × 3 distances × 4 angles × 4 scales)
     second_order_names = [
@@ -303,14 +349,14 @@ def extract_features(dataset_dir, class_subfolders, features_dir, save_images=Fa
     angles = [0, 45, 90, 135]
 
     for s in range(1, 5):
+        # Match extraction order: 13 first-order + 228 second-order per scale.
+        for name in first_order_names:
+            feature_names.append(f"S{s}_1st_{name}")
         for d in distances:
             for a in angles:
                 for feat in second_order_names:
                     feature_names.append(f"S{s}_2nd_{feat}_d{d}_a{a}")
                     
-    # add label column
-    feature_names.append("Class")
-    
     # Loop through the subfolders and extract features from each image
     for subfolder_name in class_subfolders:
         subfolder_path = os.path.join(dataset_dir, subfolder_name)
