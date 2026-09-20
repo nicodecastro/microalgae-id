@@ -1,176 +1,159 @@
-import cv2
-import os
-import pandas as pd
-import numpy as np
-from sklearn.preprocessing import MinMaxScaler, StandardScaler
+"""Geometric descriptors matching the supplied Chong reference's contour stage.
+
+Keep Area, Perimeter, Eccentricity, AspectRatio, and Circularity in that order.
+Their formulas, RETR_EXTERNAL / CHAIN_APPROX_SIMPLE, minimum of five contour
+points, and unweighted contour averaging follow the supplied reference.
+
+Preprocessing in extract_features_from_image remains grayscale -> bilateral
+(40, 1, 25) -> Canny (100, 170). Use extract_geometric_features on an already
+prepared contour image to evaluate feature extraction independently of that
+preprocessing. With identical nondegenerate contours, raw descriptors match
+the reference to floating-point precision.
+
+Degenerate/non-finite contours are excluded, and images without valid contours
+return None. Label-dependent interpolation is unnecessary and is not performed.
+Dataset export retains z-score standardization by default for compatibility;
+use standardize=False when fitting scaling inside training/CV folds.
+"""
+
 from pathlib import Path
+import warnings
 
-# Define a function to extract the morphological features
-def extract_features(dataset_dir, class_subfolders, features_dir, save_images=False):
-    # Initialize an empty list to store the feature data
-    feature_data = []
+import cv2
+import numpy as np
+import pandas as pd
 
-    count = 0
-    # Loop over the subfolders and extract features from images in each subfolder
-    for subfolder_name in class_subfolders:
-        subfolder_path = os.path.join(dataset_dir, subfolder_name)
-        subfolder_images = os.listdir(subfolder_path)
-        print(f"Class: {subfolder_name} ({len(subfolder_images)} images)")
 
-        # Loop over the images in the subfolder and extract the features
-        for image_name in subfolder_images:
-            # Load the image
-            image_path = os.path.join(subfolder_path, image_name)
-            image = cv2.imread(image_path)
+FEATURE_NAMES = [
+    "Area", "Perimeter", "Eccentricity", "AspectRatio", "Circularity",
+]
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
 
-            # Extract the features from the image
-            features = extract_features_from_image(image, image_name, subfolder_name, save_images)
-            # Print image names with features that were failed to be extracted
-            if features == None:
-              count += 1
-              print(f"{count} {subfolder_name} {image_name}")
-              feature_data.append(features + [subfolder_name])
 
-            # If features were successfully extracted, add them to the feature data
-            if features is not None:
-                feature_data.append(features + [subfolder_name])
+def _contour_features(contour):
+    """Return five finite descriptors, or None for an unusable contour."""
+    if len(contour) < 5 or not np.isfinite(contour).all():
+        return None
 
-    # Define the column names for the dataframe
-    column_names = [
-      "Eccentricity", 
-      # "Convexity", 
-      # "FeretDiameter", 
-      "Area", 
-      "Perimeter", 
-      # "Solidity", 
-      # "Extent", 
-      "AspectRatio", 
-      "Circularity", 
-      "Class"]
+    area = cv2.contourArea(contour)
+    perimeter = cv2.arcLength(contour, True)
+    _, (width, height), _ = cv2.minAreaRect(contour)
+    denominators = np.array([area, perimeter, width, height])
+    if not np.isfinite(denominators).all() or np.any(denominators <= 0):
+        return None
 
-    # Create a pandas dataframe from the feature data
-    df = pd.DataFrame(feature_data, columns=column_names)
+    try:
+        _, axes, _ = cv2.fitEllipse(contour)
+    except cv2.error:
+        return None
+    minor, major = sorted(axes)
+    if not np.isfinite([minor, major]).all() or minor <= 0:
+        return None
+    eccentricity = np.sqrt(np.clip(1.0 - (minor / major) ** 2, 0.0, 1.0))
+    values = np.array([
+        area,
+        perimeter,
+        eccentricity,
+        max(width, height) / min(width, height),
+        4.0 * np.pi * area / perimeter ** 2,
+    ])
+    return values if np.isfinite(values).all() else None
 
-    # ensure numeric
-    df['Eccentricity'] = pd.to_numeric(df['Eccentricity'], errors='coerce')
 
-    # Group the dataframe by class
-    grouped = df.groupby('Class')
+def extract_features_from_contours(contours):
+    """Average valid contours equally, as in the reference; return None if empty.
 
-    # Fill NaN values in Eccentricity column with mean value of the same class
-    df['Eccentricity'] = grouped['Eccentricity'].transform(lambda x: x.interpolate())
+    This retains the reference's five-point rule even for shapes that could
+    otherwise supply area/perimeter but cannot support fitEllipse.
+    """
+    values = []
+    for contour in contours:
+        features = _contour_features(contour)
+        if features is not None:
+            values.append(features)
+    return np.mean(values, axis=0).tolist() if values else None
 
-    # Take the mean of the forward and back rows to fill NaN values
-    df['Eccentricity'] = (df['Eccentricity'].ffill() + df['Eccentricity'].bfill()) / 2
 
-    # Fill remaining NaN values with median
-    df_numeric = df.select_dtypes(include='number')  # select numeric columns only
-    df[df_numeric.columns] = df_numeric.fillna(df_numeric.median())
+def extract_geometric_features(contour_image):
+    """Extract from an already prepared 2-D uint8 image without preprocessing.
 
-    # Apply Z-score normalization to standardize the features
-    scaler = StandardScaler()
-    df.iloc[:, :-1] = scaler.fit_transform(df.iloc[:, :-1])
-    
-    # Print the dataframe
-    print(df)
+    OpenCV treats any nonzero pixel as foreground, matching the reference's
+    findContours call. No extra thresholding, resizing, or filtering is applied.
+    """
+    contour_image = np.asarray(contour_image)
+    if contour_image.ndim != 2 or not contour_image.size or contour_image.dtype != np.uint8:
+        raise ValueError("contour_image must be a nonempty 2-D uint8 array")
+    contours, _ = cv2.findContours(
+        contour_image, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+    )
+    return extract_features_from_contours(contours)
 
-    # Export the DataFrame to a CSV file
-    export_path = Path(features_dir) / "Geometric_shape_features.csv"
-    export_path.parent.mkdir(parents=True, exist_ok=True)  # create folder(s) if needed
-    df.to_csv(export_path, index=False)
-    
 
 def extract_features_from_image(image, image_name, subfolder_name, save_images=False):
-    # Convert the image to grayscale
+    """Preserve the existing BGR preprocessing wrapper and return raw features."""
+    if (
+        image is None or image.ndim != 3 or image.shape[2] != 3
+        or image.size == 0 or image.dtype != np.uint8
+    ):
+        raise ValueError(f"Expected a nonempty uint8 BGR image: {image_name}")
+
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-
     blurred = cv2.bilateralFilter(gray, 40, 1, 25)
-    
-    # Apply adaptive thresholding to create a binary image
-    # thresh = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2)
-    
-    # Canny Edge detection
     canny = cv2.Canny(blurred, 100, 170)
-
-    # Find the contours in the binary image
-    contours, hierarchy = cv2.findContours(canny, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-    # Initialize an empty list to store the features for each contour
-    features_list = []
-
-    # Loop over the contours and extract the features
-    for cnt in contours:
-        # Check if the contour has at least five points
-        if len(cnt) < 5:
-            continue
-
-        # Calculate the area, perimeter, and Feret diameter of the contour
-        area = cv2.contourArea(cnt)
-        perimeter = cv2.arcLength(cnt, True)
-        _, (w, h), _ = cv2.minAreaRect(cnt)
-        #feret_diameter = max(w, h)
-
-        # Calculate the solidity of the contour
-        # hull = cv2.convexHull(cnt)
-        # hull_area = cv2.contourArea(hull)
-        # if hull_area == 0:
-        #     solidity = 0
-        # else:
-        #     solidity = float(area) / hull_area
-
-        # Calculate the extent of the contour
-        # rect = cv2.boundingRect(cnt)
-        # rect_area = rect[2] * rect[3]
-        # if rect_area == 0:
-        #     extent = 0
-        # else:
-        #     extent = float(area) / rect_area
-
-        # Calculate the aspect ratio of the contour
-        aspect_ratio = float(w) / h if w > h else float(h) / w
-
-        # Calculate the circularity of the contour
-        circularity = 4 * np.pi * area / (perimeter * perimeter)
-
-        # Calculate the eccentricity and convexity of the contour
-        (x, y), (MA, ma), angle = cv2.fitEllipse(cnt)
-        if ma == 0:
-            eccentricity = 0
-        else:
-            eccentricity = np.sqrt(1 - (MA / ma) ** 2)
-        # convexity = float(area) / cv2.contourArea(hull)
-
-        # Add the features to the list
-        features_list.append([
-          eccentricity, 
-          # convexity, 
-          # feret_diameter, 
-          area, 
-          perimeter, 
-          # solidity, 
-          # extent, 
-          aspect_ratio, 
-          circularity
-        ])
+    features = extract_geometric_features(canny)
 
     if save_images:
-        fail_path = Path(f"data/failed/geometric/{subfolder_name}")
-        fail_path.mkdir(parents=True, exist_ok=True)  # create folder(s) if needed
-        success_path = Path(f"data/success/geometric/{subfolder_name}")
-        success_path.mkdir(parents=True, exist_ok=True)  # create folder(s) if needed
+        status = "success" if features is not None else "failed"
+        output_dir = Path("data") / status / "geometric" / subfolder_name
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_path = output_dir / f"{Path(image_name).stem}.jpg"
+        if not cv2.imwrite(str(output_path), canny):
+            raise OSError(f"Failed to save contour image: {output_path}")
+    return features
 
-    # If there are no contours, return None
-    if not features_list:
-        if save_images:
-            cv2.imwrite(str(os.path.join(fail_path, f"{Path(image_name).stem}.jpg")), canny)
-        # print(contours)
-        return [np.nan] * len(features_list)
-    
-    if save_images:
-        cv2.imwrite(str(os.path.join(success_path, f"{Path(image_name).stem}.jpg")), canny)
 
-    # Otherwise, calculate the average of the features for all the contours
-    features_avg = np.mean(features_list, axis=0)
+def extract_features(
+    dataset_dir, class_subfolders, features_dir, save_images=False, *,
+    standardize=True,
+):
+    """Export five geometric columns plus Class; return the resulting DataFrame.
 
-    # Return the average features
-    return features_avg.tolist()
+    Images are visited in supplied class order, then sorted filename order.
+    Unreadable images and images with no valid contours are warned about and
+    skipped, rather than fabricating descriptors from class labels. Consequently
+    successful rows need not align positionally with another feature table.
+
+    standardize=True reproduces the reference's dataset-wide StandardScaler.
+    For model evaluation, choose False and fit a scaler on training folds only.
+    An entirely unsuccessful extraction raises before writing a CSV.
+    """
+    rows = []
+    for label in class_subfolders:
+        class_dir = Path(dataset_dir) / label
+        paths = sorted(
+            path for path in class_dir.iterdir()
+            if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS
+        )
+        print(f"Class: {label} ({len(paths)} images)")
+        for path in paths:
+            image = cv2.imread(str(path))
+            if image is None:
+                warnings.warn(f"Skipping unreadable image: {path}", stacklevel=2)
+                continue
+            features = extract_features_from_image(image, path.name, label, save_images)
+            if features is None:
+                warnings.warn(f"Skipping image with no valid contours: {path}", stacklevel=2)
+                continue
+            rows.append([*features, label])
+
+    if not rows:
+        raise ValueError("No valid geometric features were extracted; CSV was not written")
+    frame = pd.DataFrame(rows, columns=[*FEATURE_NAMES, "Class"])
+    if standardize:
+        from sklearn.preprocessing import StandardScaler
+
+        frame[FEATURE_NAMES] = StandardScaler().fit_transform(frame[FEATURE_NAMES])
+    output_path = Path(features_dir) / "Geometric_shape_features.csv"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    frame.to_csv(output_path, index=False)
+    return frame
