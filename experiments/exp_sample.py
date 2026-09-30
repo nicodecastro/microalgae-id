@@ -154,11 +154,12 @@ def run_experiment(config_path="utils/config.yaml"):
 
     #combined.to_csv(combined_features_path, index=False)
     #print(f"Combined CSV saved to {combined_features_path}")
+    combined = pd.read_csv(os.path.join(Path(features_dir), Path("Phase_congruency_features.csv")))
 
     # -----------------------------
     # Run classifier
     # -----------------------------
-    #run_svm(combined)
+    run_svm(combined)
     #run_knn(combined)
 
     # # -----------------------------
