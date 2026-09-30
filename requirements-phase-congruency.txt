@@ -1,0 +1,8 @@
+# Dependencies for the PC extractor and its shared resize helper.
+# Install in your project environment: python -m pip install -r requirements-phase-congruency.txt
+phasepack==1.5
+numpy
+scipy
+opencv-python
+pandas
+scikit-image
