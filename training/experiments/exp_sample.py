@@ -12,12 +12,12 @@ from pathlib import Path
 import pandas as pd
 import matplotlib.pyplot as plt
 
-from features import geometric_features, hu_moments_features, lbp_features, glcm_features, efd_features, gabor_features, phase_congruency_features as pc
-from utils.config import load_config  # YAML loader
-from classifiers.svm_model import run_svm
-from classifiers.knn_model import run_knn
+from microalgae.imaging.features import geometric_features, hu_moments_features, lbp_features, glcm_features, efd_features, gabor_features, phase_congruency_features as pc
+from training.config import load_config
+from training.classifiers.svm_model import run_svm
+from training.classifiers.knn_model import run_knn
 
-from preprocessing import preprocess_image
+from microalgae.imaging.preprocessing import preprocess_image
 
 def _preprocess_from_config(image, config):
     dataset_cfg = config["dataset"]
@@ -47,7 +47,7 @@ def _preprocess_from_config(image, config):
     )
 
 
-def run_experiment(config_path="utils/config.yaml"):
+def run_experiment(config_path=None):
     # -----------------------------
     # Load config
     # -----------------------------
@@ -189,4 +189,4 @@ def run_experiment(config_path="utils/config.yaml"):
 
 
 if __name__ == "__main__":
-    run_experiment("utils/config.yaml")
+    run_experiment()

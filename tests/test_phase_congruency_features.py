@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 from phasepack import phasecong
 
-from features.phase_congruency_features import (
+from microalgae.imaging.features.phase_congruency_features import (
     extract_features,
     pc_feature_names,
     phase_congruency_features,
@@ -109,7 +109,7 @@ def test_dataset_export_and_previews(tmp_path, image):
 
 
 def test_dataset_default_resize(tmp_path, image):
-    from preprocessing import resize_with_padding
+    from microalgae.imaging.preprocessing import resize_with_padding
 
     (tmp_path / "raw" / "alga").mkdir(parents=True)
     assert cv2.imwrite(str(tmp_path / "raw" / "alga" / "image.png"), image)

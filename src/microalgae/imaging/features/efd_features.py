@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 from pyefd import elliptic_fourier_descriptors
 from pathlib import Path
-from preprocessing import segment_image
+from ..preprocessing import segment_image
 
 # Define a function to extract the efd features
 def extract_features(dataset_dir, class_subfolders, features_dir, save_images=False):

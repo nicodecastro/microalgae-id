@@ -4,7 +4,7 @@ import numpy as np
 from scipy.stats import skew, kurtosis, mode
 import pandas as pd
 import os
-from preprocessing import segment_image, resize_with_padding
+from ..preprocessing import segment_image, resize_with_padding
 
 def _foreground(subband, mask):
     """Validate a band and ROI, keeping genuine zero-valued foreground pixels."""
@@ -306,7 +306,7 @@ def extract_gabor_features(image, mask, image_name, subfolder_name, save_images,
 def extract_features(dataset_dir, class_subfolders, features_dir, save_images=False):
     from LogGabor import LogGabor
 
-    param_path = Path(__file__).parent.parent / 'utils' / 'default_param.py'
+    param_path = Path(__file__).with_name('default_param.py')
     lg = LogGabor(str(param_path))
 
     # Initialize an empty list to store the feature data

@@ -25,7 +25,7 @@ from skimage import color, filters, morphology, measure
 from skimage.morphology import disk, binary_dilation, binary_erosion
 from scipy.ndimage import binary_fill_holes
 import cv2
-from preprocessing import resize_with_padding
+from .resize import resize_with_padding
  
  
 def segment_image(image: np.ndarray, dilation_size: int = 4, save_images: bool = False):

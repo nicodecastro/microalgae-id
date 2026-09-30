@@ -1,5 +1,5 @@
 # ==========================
-# Dataset configuration
+# Training dataset configuration
 # ==========================
 dataset:
   raw_dir: "data/raw"

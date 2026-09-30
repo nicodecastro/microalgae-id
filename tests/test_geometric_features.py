@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 from sklearn.preprocessing import StandardScaler
 
-from features import geometric_features as geometric
+from microalgae.imaging.features import geometric_features as geometric
 
 
 def reference_features(contour_image):

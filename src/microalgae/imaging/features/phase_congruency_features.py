@@ -1,7 +1,7 @@
 """Four phase-congruency descriptors from Sanchez et al. (2019), pp. 8-9.
 
 Compute mean/std of the maximum (M) and minimum (m) moment images using
-Phasepack's port of Kovesi's phasecong3. Install requirements-phase-congruency.txt.
+Phasepack's port of Kovesi's phasecong3. Install requirements.txt.
 See https://doi.org/10.7717/peerj.6770 and
 https://github.com/alimuldal/phasepack/blob/master/phasepack/phasecong.py.
 
@@ -135,7 +135,7 @@ def extract_features(
     import pandas as pd
 
     if resize is not None:
-        from preprocessing import resize_with_padding
+        from ..preprocessing import resize_with_padding
 
     extensions = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
     rows = []

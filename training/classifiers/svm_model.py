@@ -1,4 +1,4 @@
-######################## SVM model ##########################
+"""Train and evaluate SVM classifiers."""
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split, GridSearchCV, RandomizedSearchCV, cross_validate

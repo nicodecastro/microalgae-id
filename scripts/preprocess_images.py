@@ -1,7 +1,7 @@
 from pathlib import Path
-from preprocessing import resize_with_padding
+from microalgae.imaging.preprocessing import resize_with_padding
 from utils.io import load_image_paths, save_image
-from utils.config import load_config
+from training.config import load_config
 import cv2
 
 # -----------------------------

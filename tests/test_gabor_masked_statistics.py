@@ -9,7 +9,7 @@ import pandas as pd
 import pytest
 from skimage.feature import graycomatrix
 
-from features import gabor_features as gabor
+from microalgae.imaging.features import gabor_features as gabor
 
 
 def test_first_order_excludes_background_but_retains_foreground_zero():
