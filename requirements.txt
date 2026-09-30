@@ -1,0 +1,20 @@
+# Image processing and feature extraction
+numpy
+scipy
+opencv-python
+pandas
+scikit-image
+scikit-learn
+pyefd
+LogGabor
+phasepack==1.5
+
+# Experiment configuration, training, and plots
+PyYAML
+joblib
+matplotlib
+seaborn
+
+# Utility scripts and tests
+Pillow
+pytest
