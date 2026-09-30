@@ -2,7 +2,6 @@
 *.pdf
 *.docx
 /data/*
-/papers
 *.log
 *.csv
 io.py
