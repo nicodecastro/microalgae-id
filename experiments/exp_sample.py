@@ -12,7 +12,7 @@ from pathlib import Path
 import pandas as pd
 import matplotlib.pyplot as plt
 
-from features import geometric_features, hu_moments_features, lbp_features, glcm_features, efd_features, gabor_features # phase_congruency_features
+from features import geometric_features, hu_moments_features, lbp_features, glcm_features, efd_features, gabor_features, phase_congruency_features as pc
 from utils.config import load_config  # YAML loader
 from classifiers.svm_model import run_svm
 from classifiers.knn_model import run_knn
@@ -118,6 +118,9 @@ def run_experiment(config_path="utils/config.yaml"):
     # print("Extracting gabor features...")
     # gabor_features.extract_features(dataset_dir, class_subfolders, features_dir, save_images=False)
     # pc
+    # print("Extracting phase congruency features...")
+    # pc.extract_features(dataset_dir, class_subfolders, features_dir, save_images=True)
+    
     
     # -----------------------------
     # Combine features
