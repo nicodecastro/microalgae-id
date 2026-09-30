@@ -66,34 +66,35 @@ def run_experiment(config_path="utils/config.yaml"):
     # -----------------------------
     # Optional preprocessing preview, controlled by logging.save_intermediate_images
     # -----------------------------
-    for subfolder_name in class_subfolders:
-        subfolder_path = os.path.join(dataset_dir, subfolder_name)
-        for image_name in os.listdir(subfolder_path):
-            if Path(image_name).suffix.lower() not in image_formats:
-                continue
+    # print("Performing preprocessing steps...")
+    # for subfolder_name in class_subfolders:
+    #     subfolder_path = os.path.join(dataset_dir, subfolder_name)
+    #     for image_name in os.listdir(subfolder_path):
+    #         if Path(image_name).suffix.lower() not in image_formats:
+    #             continue
 
-            image_path = os.path.join(subfolder_path, image_name)
+    #         image_path = os.path.join(subfolder_path, image_name)
 
-            image = cv2.imread(image_path)
-            if image is None:
-                raise ValueError(f"Failed to load image: {image_path}")
+    #         image = cv2.imread(image_path)
+    #         if image is None:
+    #             raise ValueError(f"Failed to load image: {image_path}")
 
-            processed = _preprocess_from_config(image, config)
+    #         processed = _preprocess_from_config(image, config)
 
-            if logging_cfg["save_intermediate_images"]:
-                resized_original = preprocess_image(
-                    image,
-                    resize=(
-                        tuple(config["preprocessing"]["resize"]["target_size"])
-                        if config["preprocessing"]["resize"]["enabled"]
-                        else None
-                    ),
-                    grayscale=config["dataset"]["grayscale"],
-                )
-                output_path = preview_dir / subfolder_name / image_name
-                output_path.parent.mkdir(parents=True, exist_ok=True)
-                cv2.imwrite(str(output_path), cv2.hconcat([resized_original, processed]))
-                #cv2.imwrite(str(output_path), processed)
+    #         if logging_cfg["save_intermediate_images"]:
+    #             resized_original = preprocess_image(
+    #                 image,
+    #                 resize=(
+    #                     tuple(config["preprocessing"]["resize"]["target_size"])
+    #                     if config["preprocessing"]["resize"]["enabled"]
+    #                     else None
+    #                 ),
+    #                 grayscale=config["dataset"]["grayscale"],
+    #             )
+    #             output_path = preview_dir / subfolder_name / image_name
+    #             output_path.parent.mkdir(parents=True, exist_ok=True)
+    #             cv2.imwrite(str(output_path), cv2.hconcat([resized_original, processed]))
+    #             cv2.imwrite(str(output_path), processed)
               
     # -----------------------------
     # Load images and extract features
