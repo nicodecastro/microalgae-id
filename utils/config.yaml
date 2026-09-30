@@ -51,4 +51,4 @@ experiment:
 # Logging
 # ==========================
 logging:
-  save_intermediate_images: true
+  save_intermediate_images: false
