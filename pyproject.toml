@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "microalgae-identification"
 version = "0.1.0"
-description = "Microalgae image preprocessing and feature extraction"
+description = "Offline microalgae image review and feature extraction"
 requires-python = ">=3.10"
 
 [tool.setuptools.packages.find]

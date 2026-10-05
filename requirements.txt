@@ -18,3 +18,7 @@ seaborn
 # Utility scripts and tests
 Pillow
 pytest
+
+# Offline desktop review prototype
+PySide6
+pytest-qt
