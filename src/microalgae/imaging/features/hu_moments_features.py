@@ -1,106 +1,100 @@
-import cv2
-import numpy as np
-import os
-import pandas as pd
-from sklearn.preprocessing import StandardScaler, MinMaxScaler
+"""Seven mean Hu moments per image, following the supplied Chong reference.
+
+For every external contour, calculate cv2.moments and cv2.HuMoments, flatten
+the seven values, then take an unweighted mean across contours. An image with
+no contours yields seven zeros. No contour filtering or log transform is used.
+
+The image wrapper retains the existing grayscale, bilateral, and adaptive
+threshold steps. Use extract_hu_moments_from_binary to inspect the descriptor
+steps independently of that preprocessing.
+"""
+
 from pathlib import Path
 
-# Define function to extract flattened Hu moments from an image
-def extract_features(dataset_dir, class_subfolders, features_dir, save_images=False):
-    # Initialize empty list to store extracted features
-    feature_data = []
+import cv2
+import numpy as np
+import pandas as pd
 
-    count = 0
-    # Loop over subdirectories in the image directory
-    for subfolder_name in class_subfolders:
-        subfolder_path = os.path.join(dataset_dir, subfolder_name)
-        subfolder_images = os.listdir(subfolder_path)
-        print(f"Class: {subfolder_name} ({len(subfolder_images)} images)")
 
-        # Loop over the images in the subfolder and extract the features
-        for image_name in subfolder_images:
-            # Load the image
-            image_path = os.path.join(subfolder_path, image_name)
-            
-            # Extract mean Hu moments from image
-            hu_moments_mean = extract_hu_moments(image_path, image_name, subfolder_name, save_images)
+FEATURE_NAMES = [f"Hu_{index}" for index in range(1, 8)]
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
 
-            # Append class label and mean Hu moments to features list
-            feature_data.append(hu_moments_mean + [subfolder_name])
 
-    # Create pandas DataFrame from features list
-    columns = [f'Hu_{i}' for i in range(1, 8)] + ['Class']
-    df = pd.DataFrame(feature_data, columns=columns)
+def extract_hu_moments_from_binary(binary_image):
+    """Return the reference's seven descriptors from an 8-bit contour image."""
+    binary_image = np.asarray(binary_image)
+    if binary_image.ndim != 2 or binary_image.size == 0 or binary_image.dtype != np.uint8:
+        raise ValueError("binary_image must be a nonempty 2-D uint8 array")
 
-    # Choose which scaler to use: 'minmax' for MinMaxScaler, 'standard' for StandardScaler
-    scaler_type = 'standard'
+    contours, _ = cv2.findContours(
+        binary_image, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+    )
+    if not contours:
+        return [0.0] * 7
 
-    # Normalize the Hu moments using chosen scaler
-    hu_moments = df.iloc[:, :-1].values
-    if scaler_type == 'minmax':
-        scaler = MinMaxScaler()
-    else:
-        scaler = StandardScaler()
-    scaler.fit(hu_moments)
-    hu_moments_normalized = scaler.transform(hu_moments)
+    # Retain every contour, including degenerate ones, as in the reference.
+    hu_values = [cv2.HuMoments(cv2.moments(contour)).flatten() for contour in contours]
+    return np.mean(hu_values, axis=0).tolist()
 
-    # Add the normalized Hu moments to the DataFrame
-    for i in range(7):
-        df[f'Hu_{i+1}'] = hu_moments_normalized[:, i]
-
-    # Display the DataFrame
-    print(df)
-
-    # Export the DataFrame to a CSV file
-    if scaler_type == 'minmax':
-        export_path = Path(features_dir) / "Hu_moments_minmax_features.csv"
-    else:
-        export_path = Path(features_dir) / "Hu_moments_nonminmax_features.csv"
-    export_path.parent.mkdir(parents=True, exist_ok=True)  # create folder(s) if needed
-    df.to_csv(export_path, index=False)
 
 def extract_hu_moments(image_path, image_name, subfolder_name, save_images=False):
-    # Read image
-    img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+    """Read and preprocess one image, then calculate mean Hu moments."""
+    image = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
+    if image is None:
+        raise ValueError(f"Failed to load image: {image_path}")
 
-    # Apply bilateral blur to smooth the image while preserving edges
-    blurred = cv2.bilateralFilter(img, 40, 1, 25)
-
-    # Apply adaptive thresholding to create a binary image
-    thresh = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2)
-
-    # Find contours
-    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-    # Extract flattened Hu moments for each contour
-    hu_moments_list = []
-    for contour in contours:
-        # Calculate moments for the contour
-        moments = cv2.moments(contour)
-        # Calculate Hu moments for the moments
-        hu_moments = cv2.HuMoments(moments)
-        # Flatten the Hu moments array
-        hu_moments_flat = hu_moments.flatten()
-        # Append the flattened Hu moments to the list
-        hu_moments_list.append(hu_moments_flat)
+    # Keep preprocessing identical to the original extractor and reference.
+    blurred = cv2.bilateralFilter(image, 40, 1, 25)
+    thresholded = cv2.adaptiveThreshold(
+        blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY_INV, 11, 2,
+    )
+    features = extract_hu_moments_from_binary(thresholded)
 
     if save_images:
-        fail_path = Path(f"data/failed/hu_moments/{subfolder_name}")
-        fail_path.mkdir(parents=True, exist_ok=True)  # create folder(s) if needed
-        success_path = Path(f"data/success/hu_moments/{subfolder_name}")
-        success_path.mkdir(parents=True, exist_ok=True)  # create folder(s) if needed
+        status = "failed" if cv2.countNonZero(thresholded) == 0 else "success"
+        output_dir = Path("data") / status / "hu_moments" / subfolder_name
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_path = output_dir / f"{Path(image_name).stem}.jpg"
+        if not cv2.imwrite(str(output_path), thresholded):
+            raise OSError(f"Failed to save thresholded image: {output_path}")
 
-    # If no contours were found, return a list of zeros
-    if len(hu_moments_list) == 0:
-        if save_images:
-            cv2.imwrite(str(os.path.join(fail_path, f"{Path(image_name).stem}.jpg")), thresh)
-        return [0]*7
+    return features
 
-    if save_images:
-        cv2.imwrite(str(os.path.join(success_path, f"{Path(image_name).stem}.jpg")), thresh)
 
-    # Calculate the mean Hu moments for all contours in the image
-    mean_hu_moments = np.mean(hu_moments_list, axis=0)
+def extract_features(
+    dataset_dir, class_subfolders, features_dir, save_images=False, *,
+    standardize=True,
+):
+    """Export Hu_1..Hu_7 plus Class; return the DataFrame.
 
-    # Return the mean Hu moments for the image
-    return mean_hu_moments.tolist()
+    The default keeps the reference's dataset-wide StandardScaler and the
+    existing CSV filename. For classifier evaluation, use standardize=False
+    and fit a scaler only on training data, inside each validation fold.
+    """
+    rows = []
+    for label in class_subfolders:
+        class_dir = Path(dataset_dir) / label
+        paths = sorted(
+            path for path in class_dir.iterdir()
+            if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS
+        )
+        print(f"Class: {label} ({len(paths)} images)")
+        for path in paths:
+            rows.append([
+                *extract_hu_moments(path, path.name, label, save_images), label
+            ])
+
+    if not rows:
+        raise ValueError("No supported images found for Hu moments extraction")
+
+    frame = pd.DataFrame(rows, columns=[*FEATURE_NAMES, "Class"])
+    if standardize:
+        from sklearn.preprocessing import StandardScaler
+
+        frame[FEATURE_NAMES] = StandardScaler().fit_transform(frame[FEATURE_NAMES])
+
+    output_path = Path(features_dir) / "Hu_moments_nonminmax_features.csv"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    frame.to_csv(output_path, index=False)
+    return frame
