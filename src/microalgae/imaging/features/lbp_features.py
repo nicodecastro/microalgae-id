@@ -1,59 +1,94 @@
+"""Uniform LBP histograms following the supplied Chong reference.
+
+The descriptor uses 8 points, radius 3, ten histogram bins, and the
+reference's ``hist.sum() + 1e-7`` normalization. The image wrapper keeps
+grayscale loading and 512x512 resizing unchanged.
+"""
+
 import os
+from pathlib import Path
+
 import cv2
 import numpy as np
 import pandas as pd
 from skimage.feature import local_binary_pattern
-from sklearn.preprocessing import MinMaxScaler, StandardScaler
-from pathlib import Path
+from sklearn.preprocessing import StandardScaler
 
-# Define a function to extract the local binary patterns features
-def extract_features(dataset_dir, class_subfolders, features_dir, save_images=False):
-    # Initialize an empty list to store the feature data
-    feature_data = []
-    labels_data = []
 
-    # Loop over the subfolders and extract features from images in each subfolder
-    for subfolder_name in class_subfolders:
-        subfolder_path = os.path.join(dataset_dir, subfolder_name)
-        subfolder_images = os.listdir(subfolder_path)
-        print(f"Class: {subfolder_name} ({len(subfolder_images)} images)")
+FEATURE_NAMES = [f"feature_{index}" for index in range(10)]
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
 
-        # Loop over the images in the subfolder and extract the features
-        for image_name in subfolder_images:
-            # Load the image
-            image_path = os.path.join(subfolder_path, image_name)
-            image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
-            image_resize = cv2.resize(image, (512, 512))
-            
-            # Extract the features from the image
-            features = extract_lbp_features(image_resize, image_name, subfolder_name, method='uniform', save_images=save_images) # 'default','ror','uniform','nri_uniform','var'
-            feature_data.append(features)
-            labels_data.append(subfolder_name)
-                
-    df = pd.DataFrame(feature_data, columns=["feature_{}".format(i) for i in range(len(feature_data[0]))])
-    df["Class"] = labels_data
 
-    # Normalize the features using z-score normalization
-    scaler = StandardScaler()
-    df[df.columns[:-1]] = scaler.fit_transform(df[df.columns[:-1]])
+def extract_lbp_histogram(image, method="uniform", radius=3, n_points=8):
+    """Calculate the reference histogram from an already prepared image."""
+    image = np.asarray(image)
+    if image.ndim != 2 or image.size == 0 or image.dtype != np.uint8:
+        raise ValueError("image must be a nonempty 2-D uint8 array")
 
-    # Print the first few rows of the dataframe
-    print(df)
-
-    # Export the DataFrame to a CSV file
-    export_path = Path(features_dir) / "LBP_features.csv"
-    export_path.parent.mkdir(parents=True, exist_ok=True)  # create folder(s) if needed
-    df.to_csv(export_path, index=False)
-
-def extract_lbp_features(image, image_name, subfolder_name, method='uniform', radius=3, n_points=8, save_images=False):
     lbp = local_binary_pattern(image, n_points, radius, method=method)
-    hist, _ = np.histogram(lbp.ravel(), bins=np.arange(0, n_points + 3), range=(0, n_points + 2))
+    hist, _ = np.histogram(
+        lbp.ravel(), bins=np.arange(0, n_points + 3), range=(0, n_points + 2)
+    )
     hist = hist.astype("float")
-    hist /= (hist.sum() + 1e-7)
+    hist /= hist.sum() + 1e-7
+    return hist
+
+
+def extract_lbp_features(
+    image, image_name, subfolder_name, method="uniform", radius=3,
+    n_points=8, save_images=False,
+):
+    """Keep the existing public interface and optional image preview."""
+    hist = extract_lbp_histogram(image, method=method, radius=radius, n_points=n_points)
 
     if save_images:
-        success_path = Path(f"data/success/lbp/{subfolder_name}")
-        success_path.mkdir(parents=True, exist_ok=True)  # create folder(s) if needed
-        cv2.imwrite(str(os.path.join(success_path, f"{Path(image_name).stem}.jpg")), image)
+        output_dir = Path("data") / "success" / "lbp" / subfolder_name
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_path = output_dir / f"{Path(image_name).stem}.jpg"
+        if not cv2.imwrite(str(output_path), image):
+            raise OSError(f"Failed to save LBP image: {output_path}")
 
     return hist
+
+
+def extract_features(
+    dataset_dir, class_subfolders, features_dir, save_images=False, *,
+    standardize=True,
+):
+    """Export ten LBP columns plus Class in the input directory order.
+
+    The default reproduces the reference's dataset-wide StandardScaler.
+    Use ``standardize=False`` to export raw histograms.
+    """
+    rows = []
+    for label in class_subfolders:
+        class_dir = Path(dataset_dir) / label
+        image_names = [
+            name for name in os.listdir(class_dir)
+            if (class_dir / name).is_file()
+            and Path(name).suffix.lower() in IMAGE_EXTENSIONS
+        ]
+        print(f"Class: {label} ({len(image_names)} images)")
+        for image_name in image_names:
+            image_path = class_dir / image_name
+            image = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
+            if image is None:
+                raise ValueError(f"Failed to load image: {image_path}")
+            resized = cv2.resize(image, (512, 512))
+            hist = extract_lbp_features(
+                resized, image_name, label, method="uniform", save_images=save_images
+            )
+            rows.append([*hist, label])
+
+    if not rows:
+        raise ValueError("No supported images found for LBP feature extraction")
+
+    frame = pd.DataFrame(rows, columns=[*FEATURE_NAMES, "Class"])
+    if standardize:
+        frame[FEATURE_NAMES] = StandardScaler().fit_transform(frame[FEATURE_NAMES])
+
+    print(frame)
+    output_path = Path(features_dir) / "LBP_features.csv"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    frame.to_csv(output_path, index=False)
+    return frame
