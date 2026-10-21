@@ -1,7 +1,7 @@
 """Regression tests for ROI statistics and spatially masked GLCMs."""
 
-import sys
 from types import SimpleNamespace
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -16,7 +16,7 @@ def test_first_order_excludes_background_but_retains_foreground_zero():
     band = np.array([[0.0, 2.0], [1000.0, -1000.0]])
     mask = np.array([[255, 255], [0, 0]], dtype=np.uint8)
     stats = gabor.first_order_features(band, bins=2, mask=mask)
-    np.testing.assert_allclose(stats[:7], [1, 0, 0, 2, 1, 2, 1])
+    np.testing.assert_allclose(stats[:7], [1, 0.5, 0, 2, 1, 2, 1])
     np.testing.assert_allclose(stats[7:11], [0.5, 1, 1.5, 1])
     band[mask == 0] = np.nan
     np.testing.assert_array_equal(gabor.first_order_features(band, bins=2, mask=mask), stats)
@@ -134,7 +134,7 @@ def test_empty_mask_fails_before_filtering():
 
 
 def test_export_labels_match_per_scale_feature_order(tmp_path, monkeypatch):
-    monkeypatch.setitem(sys.modules, "LogGabor", SimpleNamespace(LogGabor=FakeLogGabor))
+    monkeypatch.setattr(gabor, "_LogGaborBank", FakeLogGabor)
     def segmentation(image, dilation_size):
         mask = np.zeros(image.shape, dtype=bool)
         mask[100:150, 100:150] = True
@@ -150,3 +150,141 @@ def test_export_labels_match_per_scale_feature_order(tmp_path, monkeypatch):
         assert frame.columns[(scale - 1) * 241] == f"S{scale}_1st_mean"
         assert frame.loc[0, f"S{scale}_1st_mean"] == 6 * scale
         assert frame.loc[0, f"S{scale}_2nd_energy_d1_a0"] == 1
+
+
+def test_histogram_mode_and_pearson_kurtosis():
+    values = np.array([[0, 10.01, 10.02, 10.03, 10.04]])
+    stats = gabor.first_order_features(values)
+    assert stats[1] == pytest.approx(10.04 - (10.04 / 255) / 2)
+    assert stats[6] == pytest.approx(-0.2 * np.log2(0.2) - 0.8 * np.log2(0.8))
+    centered = values - values.mean()
+    assert stats[12] == pytest.approx(np.mean(centered ** 4) / np.var(values) ** 2)
+
+
+@pytest.mark.parametrize("bins", [True, 0, 1, 2.5, np.nan])
+def test_rejects_invalid_histogram_bins(bins):
+    with pytest.raises(ValueError, match="bins"):
+        gabor.first_order_features(np.ones((8, 8)), bins=bins)
+
+
+@pytest.mark.parametrize("function", [gabor.first_order_features, gabor.compute_glcm_matrices, gabor.second_order_features])
+@pytest.mark.parametrize("band", [np.ones((8, 8), dtype=complex), np.full((8, 8), "1"), np.ones((8, 8, 3))])
+def test_rejects_non_real_or_non_image_bands(function, band):
+    with pytest.raises(ValueError, match="2-D real numeric"):
+        function(band)
+
+
+@pytest.mark.parametrize("responses", [
+    np.zeros((8, 8, 6, 3)), np.zeros((8, 8, 4, 6)), np.zeros((8, 8)),
+    np.full((8, 8, 6, 4), np.nan), np.zeros((7, 8, 6, 4)),
+])
+def test_rejects_malformed_or_nonfinite_bank_responses(responses):
+    supplied = SimpleNamespace(linear_pyramid=lambda image: responses)
+    with pytest.raises(ValueError, match="response"):
+        gabor.extract_gabor_statistics(np.ones((8, 8)), lg=supplied)
+
+
+def test_rejects_invalid_bank_and_nonfinite_filter_input():
+    with pytest.raises(ValueError, match="linear_pyramid"):
+        gabor.extract_gabor_statistics(np.ones((8, 8)), lg={})
+    image = np.ones((8, 8))
+    image[0, 0] = np.nan
+    mask = np.ones_like(image)
+    mask[0, 0] = 0
+    with pytest.raises(ValueError, match="finite"):
+        gabor.extract_gabor_statistics(image, mask, lg=FakeLogGabor())
+
+
+def test_complex_orientation_pooling_sums_magnitudes_not_complex_values():
+    responses = np.zeros((2, 2, 6, 4), dtype=complex)
+    responses[:, :, 0] = 3 + 4j
+    responses[:, :, 1] = -3 - 4j
+    np.testing.assert_array_equal(gabor.collapse_orientations(responses), np.full((2, 2, 4), 10))
+
+
+def test_dataset_preserves_class_directory_order_and_binary_mask_encodings(tmp_path, monkeypatch):
+    monkeypatch.setattr(gabor, "_LogGaborBank", FakeLogGabor)
+    monkeypatch.setattr(
+        gabor, "segment_image",
+        lambda image, dilation_size: (np.full(image.shape, 255, dtype=np.uint8), image, image),
+    )
+    for label in ["z", "a"]:
+        path = tmp_path / "raw" / label
+        path.mkdir(parents=True)
+        assert cv2.imwrite(str(path / "b.png"), np.full((16, 24), 9, dtype=np.uint8))
+        assert cv2.imwrite(str(path / "a.PNG"), np.full((256, 256), 2, dtype=np.uint8))
+        (path / "ignored.txt").touch()
+        (path / "directory.png").mkdir()
+    monkeypatch.setattr(gabor.os, "listdir", lambda path: ["b.png", "ignored.txt", "directory.png", "a.PNG"])
+    frame = gabor.extract_features(tmp_path / "raw", ["z", "a"], tmp_path / "output")
+    assert frame.Class.tolist() == ["z", "z", "a", "a"]
+    # Resizing the rectangular image pads one third of its 256 x 256 canvas.
+    np.testing.assert_allclose(frame.S1_1st_mean, [9 * 170 / 256, 2, 9 * 170 / 256, 2])
+    assert frame.columns[0] == "S1_1st_mean"
+    assert frame.columns[241] == "S2_1st_mean"
+    assert frame.columns[-1] == "Class"
+
+
+@pytest.mark.parametrize("class_subfolders", [[], ["alga"]])
+def test_empty_dataset_does_not_export(tmp_path, class_subfolders):
+    (tmp_path / "alga").mkdir()
+    (tmp_path / "alga" / "not_image.txt").touch()
+    with pytest.raises(ValueError, match="No supported images"):
+        gabor.extract_features(tmp_path, class_subfolders, tmp_path / "output")
+    assert not (tmp_path / "output").exists()
+
+
+def test_unreadable_image_reports_path_without_export(tmp_path):
+    (tmp_path / "alga").mkdir()
+    path = tmp_path / "alga" / "corrupt.png"
+    path.touch()
+    with pytest.raises(ValueError) as error:
+        gabor.extract_features(tmp_path, ["alga"], tmp_path / "output")
+    assert "Failed to load image" in str(error.value)
+    assert str(path) in str(error.value)
+    assert not (tmp_path / "output").exists()
+
+
+def test_preview_uint8_and_correct_directory(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    saved = []
+    monkeypatch.setattr(cv2, "imwrite", lambda path, image: saved.append((path, image.copy())) or True)
+    image = np.array([[-5.2, 300], [10.4, 10.6]])
+    gabor.extract_gabor_features(image, None, "input.png", "alga", True, FakeLogGabor())
+    path, preview = saved[0]
+    assert Path(path) == Path("data/success/gabor/alga/input.jpg")
+    assert preview.dtype == np.uint8
+    np.testing.assert_array_equal(preview, [[0, 255], [10, 11]])
+
+
+def test_failed_preview_reports_source_image_without_export(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "alga").mkdir()
+    path = tmp_path / "alga" / "input.png"
+    assert cv2.imwrite(str(path), np.ones((256, 256), dtype=np.uint8))
+    monkeypatch.setattr(gabor, "_LogGaborBank", FakeLogGabor)
+    monkeypatch.setattr(gabor, "segment_image", lambda image, dilation_size: (np.ones_like(image), image, image))
+    monkeypatch.setattr(cv2, "imwrite", lambda *args: False)
+    with pytest.raises(OSError) as error:
+        gabor.extract_features(tmp_path, ["alga"], tmp_path / "output", True)
+    assert "Failed to save Log-Gabor preview" in str(error.value)
+    assert str(path) in str(error.value)
+    assert not (tmp_path / "output").exists()
+
+
+def test_filter_failure_reports_source_image_without_export(tmp_path, monkeypatch):
+    (tmp_path / "alga").mkdir()
+    path = tmp_path / "alga" / "input.png"
+    assert cv2.imwrite(str(path), np.ones((256, 256), dtype=np.uint8))
+    monkeypatch.setattr(gabor, "_LogGaborBank", FakeLogGabor)
+    monkeypatch.setattr(gabor, "segment_image", lambda image, dilation_size: (np.ones_like(image), image, image))
+
+    def fail(self, image):
+        raise FloatingPointError("unexplained failure")
+
+    monkeypatch.setattr(FakeLogGabor, "linear_pyramid", fail)
+    with pytest.raises(FloatingPointError) as error:
+        gabor.extract_features(tmp_path, ["alga"], tmp_path / "output")
+    assert "unexplained failure" in str(error.value)
+    assert str(path) in str(error.value)
+    assert not (tmp_path / "output").exists()
