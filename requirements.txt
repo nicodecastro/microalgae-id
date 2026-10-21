@@ -5,7 +5,7 @@ opencv-python
 pandas
 scikit-image
 scikit-learn
-pyefd
+pyefd==1.8.0
 LogGabor
 phasepack==1.5
 
