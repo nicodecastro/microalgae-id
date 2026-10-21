@@ -7,11 +7,11 @@ from sklearn.metrics import accuracy_score, confusion_matrix
 import matplotlib.pyplot as plt
 import seaborn as sns
 import joblib
+from training.feature_tables import classifier_inputs
 
 def run_svm(df):
   # Split the dataset into training and testing sets
-  X = df.drop('Class', axis=1).values
-  y = df['Class'].values
+  X, y = classifier_inputs(df)
   X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
 
   # Convert y_train and y_test to Pandas Series

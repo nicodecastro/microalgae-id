@@ -126,34 +126,8 @@ def run_experiment(config_path=None):
     # -----------------------------
     # Combine features
     # -----------------------------
-    # print("Combining features...")
-    # check if combined features dir exists
-    # output_file = "Combined_features.csv"
-    # combined_features_path = Path(combined_features_dir).joinpath(output_file)
-    # combined_features_path.parent.mkdir(parents=True, exist_ok=True)
-    
-    # features_path = Path(features_dir)
-    # dfs = []
-    # class_col = None
-    # for file in features_path.iterdir():  # iterate over all feature csv files
-        # if file.is_file():
-            # df = pd.read_csv(file)
-
-            # save class column once
-            # if class_col is None:
-                # class_col = df.iloc[:, -1]
-
-            # store feature columns
-            # dfs.append(df.iloc[:, :-1])
-
-    # combine all features horizontally
-    # combined = pd.concat(dfs, axis=1)
-
-    # add class column back
-    # combined["Class"] = class_col
-
-    #combined.to_csv(combined_features_path, index=False)
-    #print(f"Combined CSV saved to {combined_features_path}")
+    # Use scripts/check_feature_tables.py --combine for an explicitly selected,
+    # validated ID join. Never concatenate feature tables by row position.
     combined = pd.read_csv(os.path.join(Path(features_dir), Path("Phase_congruency_features.csv")))
 
     # -----------------------------
