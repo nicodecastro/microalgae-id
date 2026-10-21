@@ -189,13 +189,13 @@ def test_real_default_dataset_path_reuses_bank_and_exports_raw(tmp_path, monkeyp
         images.append(image)
     frame = gabor.extract_features(tmp_path / "raw", ["b", "a"], tmp_path / "output", True)
     assert built == [1]
-    assert frame.shape == (2, 965)
-    assert list(frame.columns) == [*gabor.FEATURE_NAMES, "Class"]
+    assert frame.shape == (2, 966)
+    assert list(frame.columns) == [*gabor.FEATURE_NAMES, "image_id", "Class"]
     assert frame.Class.tolist() == ["b", "a"]
     processed = gabor.resize_with_padding(images[0], (256, 256))
     mask, *_ = segmentation(processed, 4)
     expected = gabor.extract_gabor_statistics(processed * mask, mask, lg=bank)
-    np.testing.assert_allclose(frame.iloc[0, :-1].to_numpy(dtype=float), expected)
+    np.testing.assert_allclose(frame.loc[0, gabor.FEATURE_NAMES].to_numpy(dtype=float), expected)
     pd.testing.assert_frame_equal(frame, pd.read_csv(tmp_path / "output" / "Gabor_features.csv"))
     assert len(list((tmp_path / "data" / "success" / "gabor").rglob("*.jpg"))) == 2
     assert not (tmp_path / "data" / "success" / "efd").exists()

@@ -14,9 +14,9 @@ import pandas as pd
 from skimage.feature import local_binary_pattern
 from sklearn.preprocessing import StandardScaler
 
+from ..dataset import ExtractionFailureReport, IMAGE_EXTENSIONS, image_id
 
 FEATURE_NAMES = [f"feature_{index}" for index in range(10)]
-IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
 
 
 def extract_lbp_histogram(image, method="uniform", radius=3, n_points=8):
@@ -55,11 +55,13 @@ def extract_features(
     dataset_dir, class_subfolders, features_dir, save_images=False, *,
     standardize=True,
 ):
-    """Export ten LBP columns plus Class in the input directory order.
+    """Export ten LBP columns, image_id, and Class in input directory order.
 
     The default reproduces the reference's dataset-wide StandardScaler.
     Use ``standardize=False`` to export raw histograms.
     """
+    output_path = Path(features_dir) / "LBP_features.csv"
+    failures = ExtractionFailureReport(output_path, dataset_dir)
     rows = []
     for label in class_subfolders:
         class_dir = Path(dataset_dir) / label
@@ -71,24 +73,24 @@ def extract_features(
         print(f"Class: {label} ({len(image_names)} images)")
         for image_name in image_names:
             image_path = class_dir / image_name
-            image = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
-            if image is None:
-                raise ValueError(f"Failed to load image: {image_path}")
-            resized = cv2.resize(image, (512, 512))
-            hist = extract_lbp_features(
-                resized, image_name, label, method="uniform", save_images=save_images
-            )
-            rows.append([*hist, label])
+            with failures.track(image_path, label):
+                image = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
+                if image is None:
+                    raise ValueError(f"Failed to load image: {image_path}")
+                resized = cv2.resize(image, (512, 512))
+                hist = extract_lbp_features(
+                    resized, image_name, label, method="uniform", save_images=save_images
+                )
+                rows.append([*hist, image_id(image_path, dataset_dir), label])
 
     if not rows:
         raise ValueError("No supported images found for LBP feature extraction")
 
-    frame = pd.DataFrame(rows, columns=[*FEATURE_NAMES, "Class"])
+    frame = pd.DataFrame(rows, columns=[*FEATURE_NAMES, "image_id", "Class"])
     if standardize:
         frame[FEATURE_NAMES] = StandardScaler().fit_transform(frame[FEATURE_NAMES])
 
     print(frame)
-    output_path = Path(features_dir) / "LBP_features.csv"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     frame.to_csv(output_path, index=False)
     return frame

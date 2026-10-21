@@ -127,9 +127,10 @@ def test_batch_export_scaling_and_failed_images(tmp_path):
         unscaled = geometric.extract_features(tmp_path / "raw", ["alga"], tmp_path / "unscaled", standardize=False)
     assert len(warnings_seen) == 2
     assert list(unscaled.columns) == [
-        "Area", "Perimeter", "Eccentricity", "AspectRatio", "Circularity", "Class",
+        "Area", "Perimeter", "Eccentricity", "AspectRatio", "Circularity", "image_id", "Class",
     ]
-    assert unscaled.shape == (2, 6)
+    assert unscaled.shape == (2, 7)
+    assert unscaled["image_id"].tolist() == ["alga/a.png", "alga/b.png"]
     expected = [
         geometric.extract_features_from_image(cv2.cvtColor(img, cv2.COLOR_GRAY2BGR), "test.png", "alga")
         for img in (first, second)

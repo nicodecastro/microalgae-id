@@ -159,7 +159,7 @@ def test_dataset_export_and_previews(tmp_path, image):
         (dataset / label / "ignored.txt").touch()
     output = tmp_path / "features"
     frame = extract_features(dataset, ["alga_b", "alga_a"], output, True, resize=None)
-    assert list(frame.columns) == [*pc_feature_names, "Class"]
+    assert list(frame.columns) == [*pc_feature_names, "image_id", "Class"]
     assert frame["Class"].tolist() == ["alga_b", "alga_b", "alga_a", "alga_a"]
     np.testing.assert_array_equal(frame.iloc[0, :4].to_numpy(dtype=float), np.zeros(4))
     np.testing.assert_allclose(frame.iloc[1, :4].to_numpy(dtype=float), phase_congruency_features(image))

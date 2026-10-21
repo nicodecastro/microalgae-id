@@ -164,7 +164,7 @@ def test_exports_keep_raw_values_and_separate_normalized_results(tmp_path, monke
         dataset, ["second", "first"], output_dir, normalize_shape=True
     )
     assert raw_path.read_bytes() == raw_bytes
-    assert raw.columns.tolist() == normalized.columns.tolist() == [*efd.FEATURE_NAMES, "Class"]
+    assert raw.columns.tolist() == normalized.columns.tolist() == [*efd.FEATURE_NAMES, "image_id", "Class"]
     assert raw["Class"].tolist() == normalized["Class"].tolist() == ["second", "first", "first"]
     for flag, frame, filename in [
         (False, raw, "EFD_features.csv"),
@@ -192,7 +192,8 @@ def test_empty_dataset_and_unreadable_image_fail_before_export(tmp_path):
     (class_dir / "broken.png").write_text("not a PNG")
     with pytest.raises(ValueError, match="Failed to load image"):
         efd.extract_features(class_dir.parent, ["class"], output_dir)
-    assert not output_dir.exists()
+    assert not (output_dir / "EFD_features.csv").exists()
+    assert (output_dir / "EFD_features_failures.csv").is_file()
 
 
 def test_preview_uses_uint8_and_reports_failed_write(tmp_path, monkeypatch):

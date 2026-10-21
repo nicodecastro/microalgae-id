@@ -15,9 +15,9 @@ import cv2
 import numpy as np
 import pandas as pd
 
+from ..dataset import ExtractionFailureReport, IMAGE_EXTENSIONS, image_id
 
 FEATURE_NAMES = [f"Hu_{index}" for index in range(1, 8)]
-IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
 
 
 def extract_hu_moments_from_binary(binary_image):
@@ -66,12 +66,14 @@ def extract_features(
     dataset_dir, class_subfolders, features_dir, save_images=False, *,
     standardize=True,
 ):
-    """Export Hu_1..Hu_7 plus Class; return the DataFrame.
+    """Export Hu_1..Hu_7, image_id, and Class; return the DataFrame.
 
     The default keeps the reference's dataset-wide StandardScaler and the
     existing CSV filename. For classifier evaluation, use standardize=False
     and fit a scaler only on training data, inside each validation fold.
     """
+    output_path = Path(features_dir) / "Hu_moments_nonminmax_features.csv"
+    failures = ExtractionFailureReport(output_path, dataset_dir)
     rows = []
     for label in class_subfolders:
         class_dir = Path(dataset_dir) / label
@@ -81,20 +83,21 @@ def extract_features(
         )
         print(f"Class: {label} ({len(paths)} images)")
         for path in paths:
-            rows.append([
-                *extract_hu_moments(path, path.name, label, save_images), label
-            ])
+            with failures.track(path, label):
+                rows.append([
+                    *extract_hu_moments(path, path.name, label, save_images),
+                    image_id(path, dataset_dir), label,
+                ])
 
     if not rows:
         raise ValueError("No supported images found for Hu moments extraction")
 
-    frame = pd.DataFrame(rows, columns=[*FEATURE_NAMES, "Class"])
+    frame = pd.DataFrame(rows, columns=[*FEATURE_NAMES, "image_id", "Class"])
     if standardize:
         from sklearn.preprocessing import StandardScaler
 
         frame[FEATURE_NAMES] = StandardScaler().fit_transform(frame[FEATURE_NAMES])
 
-    output_path = Path(features_dir) / "Hu_moments_nonminmax_features.csv"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     frame.to_csv(output_path, index=False)
     return frame

@@ -15,11 +15,11 @@ import pandas as pd
 from skimage.feature import graycomatrix, graycoprops
 from sklearn.preprocessing import StandardScaler
 
+from ..dataset import ExtractionFailureReport, IMAGE_EXTENSIONS, image_id
 
 PROPERTIES = ["contrast", "dissimilarity", "homogeneity", "energy", "correlation"]
 DISTANCES = [1, 3, 5]
 ANGLES = [0, np.pi / 4, np.pi / 2, 3 * np.pi / 4]
-IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
 GLCM_MODES = ("chong_code", "orientation_pooled")
 
 
@@ -70,7 +70,7 @@ def extract_features(
     dataset_dir, class_subfolders, features_dir, save_images=False, *,
     standardize=True, mode="chong_code",
 ):
-    """Export selected GLCM columns plus Class in input directory order.
+    """Export selected GLCM columns, image_id, and Class in directory order.
 
     The default reproduces the Chong reference and its dataset-wide scaler.
     Orientation pooling exports fifteen features to a separate CSV.
@@ -81,6 +81,12 @@ def extract_features(
         PROPERTIES if mode == "chong_code"
         else [f"{prop}_d{distance}" for prop in PROPERTIES for distance in DISTANCES]
     )
+    filename = (
+        "GLCM_features.csv" if mode == "chong_code"
+        else "GLCM_orientation_pooled_features.csv"
+    )
+    output_path = Path(features_dir) / filename
+    failures = ExtractionFailureReport(output_path, dataset_dir)
     rows = []
     for label in class_subfolders:
         class_dir = Path(dataset_dir) / label
@@ -92,28 +98,24 @@ def extract_features(
         print(f"Class: {label} ({len(image_names)} images)")
         for image_name in image_names:
             image_path = class_dir / image_name
-            image = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
-            if image is None:
-                raise ValueError(f"Failed to load image: {image_path}")
-            resized = cv2.resize(image, (512, 512))
-            features = extract_glcm_features(
-                resized, image_name, label, PROPERTIES, save_images, mode=mode
-            )
-            rows.append([*features, label])
+            with failures.track(image_path, label):
+                image = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
+                if image is None:
+                    raise ValueError(f"Failed to load image: {image_path}")
+                resized = cv2.resize(image, (512, 512))
+                features = extract_glcm_features(
+                    resized, image_name, label, PROPERTIES, save_images, mode=mode
+                )
+                rows.append([*features, image_id(image_path, dataset_dir), label])
 
     if not rows:
         raise ValueError("No supported images found for GLCM feature extraction")
 
-    frame = pd.DataFrame(rows, columns=[*feature_names, "Class"])
+    frame = pd.DataFrame(rows, columns=[*feature_names, "image_id", "Class"])
     if standardize:
         frame[feature_names] = StandardScaler().fit_transform(frame[feature_names])
 
     print(frame)
-    filename = (
-        "GLCM_features.csv" if mode == "chong_code"
-        else "GLCM_orientation_pooled_features.csv"
-    )
-    output_path = Path(features_dir) / filename
     output_path.parent.mkdir(parents=True, exist_ok=True)
     frame.to_csv(output_path, index=False)
     return frame

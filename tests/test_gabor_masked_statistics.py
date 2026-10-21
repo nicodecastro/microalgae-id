@@ -144,7 +144,7 @@ def test_export_labels_match_per_scale_feature_order(tmp_path, monkeypatch):
     assert cv2.imwrite(str(tmp_path / "raw" / "alga" / "image.png"), np.full((256, 256), 6, dtype=np.uint8))
     gabor.extract_features(tmp_path / "raw", ["alga"], tmp_path / "features")
     frame = pd.read_csv(tmp_path / "features" / "Gabor_features.csv")
-    assert frame.shape == (1, 965)
+    assert frame.shape == (1, 966)
     assert frame.loc[0, "Class"] == "alga"
     for scale in range(1, 5):
         assert frame.columns[(scale - 1) * 241] == f"S{scale}_1st_mean"
@@ -231,7 +231,7 @@ def test_empty_dataset_does_not_export(tmp_path, class_subfolders):
     (tmp_path / "alga" / "not_image.txt").touch()
     with pytest.raises(ValueError, match="No supported images"):
         gabor.extract_features(tmp_path, class_subfolders, tmp_path / "output")
-    assert not (tmp_path / "output").exists()
+    assert not (tmp_path / "output" / "Gabor_features.csv").exists()
 
 
 def test_unreadable_image_reports_path_without_export(tmp_path):
@@ -242,7 +242,7 @@ def test_unreadable_image_reports_path_without_export(tmp_path):
         gabor.extract_features(tmp_path, ["alga"], tmp_path / "output")
     assert "Failed to load image" in str(error.value)
     assert str(path) in str(error.value)
-    assert not (tmp_path / "output").exists()
+    assert not (tmp_path / "output" / "Gabor_features.csv").exists()
 
 
 def test_preview_uint8_and_correct_directory(tmp_path, monkeypatch):
@@ -269,7 +269,7 @@ def test_failed_preview_reports_source_image_without_export(tmp_path, monkeypatc
         gabor.extract_features(tmp_path, ["alga"], tmp_path / "output", True)
     assert "Failed to save Log-Gabor preview" in str(error.value)
     assert str(path) in str(error.value)
-    assert not (tmp_path / "output").exists()
+    assert not (tmp_path / "output" / "Gabor_features.csv").exists()
 
 
 def test_filter_failure_reports_source_image_without_export(tmp_path, monkeypatch):
@@ -287,4 +287,4 @@ def test_filter_failure_reports_source_image_without_export(tmp_path, monkeypatc
         gabor.extract_features(tmp_path, ["alga"], tmp_path / "output")
     assert "unexplained failure" in str(error.value)
     assert str(path) in str(error.value)
-    assert not (tmp_path / "output").exists()
+    assert not (tmp_path / "output" / "Gabor_features.csv").exists()

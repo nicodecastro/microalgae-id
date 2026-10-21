@@ -78,7 +78,7 @@ def test_export_raw_and_default_scaled_values(tmp_path):
         raw[lbp.FEATURE_NAMES].to_numpy(),
         np.array([hist for hist, _ in expected_rows]),
     )
-    assert raw.columns.tolist() == [*lbp.FEATURE_NAMES, "Class"]
+    assert raw.columns.tolist() == [*lbp.FEATURE_NAMES, "image_id", "Class"]
     assert raw["Class"].tolist() == [label for _, label in expected_rows]
     pd.testing.assert_frame_equal(
         pd.read_csv(features_dir / "LBP_features.csv"), raw,

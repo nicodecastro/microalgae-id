@@ -14,11 +14,11 @@ import pandas as pd
 from pyefd import elliptic_fourier_descriptors
 
 from ..preprocessing import segment_image
+from ..dataset import ExtractionFailureReport, IMAGE_EXTENSIONS, image_id
 
 
 NUM_HARMONICS = 30
 FEATURE_NAMES = [f"efd_amp{index}" for index in range(1, NUM_HARMONICS + 1)]
-IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
 
 
 def extract_efd_amplitudes(contour, *, normalize_shape=False):
@@ -92,11 +92,16 @@ def extract_features(
     dataset_dir, class_subfolders, features_dir, save_images=False, *,
     normalize_shape=False,
 ):
-    """Export 30 amplitudes plus Class, preserving class and directory order.
+    """Export 30 amplitudes, image_id, and Class in class and directory order.
 
     Both variants use the existing segmentation and retain unstandardized
     feature columns. Shape-normalized amplitudes are saved to a separate CSV.
     """
+    filename = (
+        "EFD_shape_normalized_features.csv" if normalize_shape else "EFD_features.csv"
+    )
+    output_path = Path(features_dir) / filename
+    failures = ExtractionFailureReport(output_path, dataset_dir)
     rows = []
     for label in class_subfolders:
         class_dir = Path(dataset_dir) / label
@@ -108,24 +113,21 @@ def extract_features(
         print(f"Class: {label} ({len(image_names)} images)")
         for image_name in image_names:
             image_path = class_dir / image_name
-            image = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
-            if image is None:
-                raise ValueError(f"Failed to load image: {image_path}")
-            mask, _, _ = segment_image(image, dilation_size=4)
-            features = extract_efd_features(
-                mask, image_name, label, save_images, normalize_shape=normalize_shape
-            )
-            rows.append([*features, label])
+            with failures.track(image_path, label):
+                image = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
+                if image is None:
+                    raise ValueError(f"Failed to load image: {image_path}")
+                mask, _, _ = segment_image(image, dilation_size=4)
+                features = extract_efd_features(
+                    mask, image_name, label, save_images, normalize_shape=normalize_shape
+                )
+                rows.append([*features, image_id(image_path, dataset_dir), label])
 
     if not rows:
         raise ValueError("No supported images found for EFD feature extraction")
 
-    frame = pd.DataFrame(rows, columns=[*FEATURE_NAMES, "Class"])
+    frame = pd.DataFrame(rows, columns=[*FEATURE_NAMES, "image_id", "Class"])
     print(frame)
-    filename = (
-        "EFD_shape_normalized_features.csv" if normalize_shape else "EFD_features.csv"
-    )
-    output_path = Path(features_dir) / filename
     output_path.parent.mkdir(parents=True, exist_ok=True)
     frame.to_csv(output_path, index=False)
     return frame

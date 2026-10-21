@@ -23,11 +23,11 @@ import cv2
 import numpy as np
 import pandas as pd
 
+from ..dataset import ExtractionFailureReport, IMAGE_EXTENSIONS, image_id
 
 FEATURE_NAMES = [
     "Area", "Perimeter", "Eccentricity", "AspectRatio", "Circularity",
 ]
-IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
 
 
 def _contour_features(contour):
@@ -116,7 +116,7 @@ def extract_features(
     dataset_dir, class_subfolders, features_dir, save_images=False, *,
     standardize=True,
 ):
-    """Export five geometric columns plus Class; return the resulting DataFrame.
+    """Export five geometric columns, image_id, and Class; return the DataFrame.
 
     Images are visited in supplied class order, then sorted filename order.
     Unreadable images and images with no valid contours are warned about and
@@ -127,6 +127,8 @@ def extract_features(
     For model evaluation, choose False and fit a scaler on training folds only.
     An entirely unsuccessful extraction raises before writing a CSV.
     """
+    output_path = Path(features_dir) / "Geometric_shape_features.csv"
+    failures = ExtractionFailureReport(output_path, dataset_dir)
     rows = []
     for label in class_subfolders:
         class_dir = Path(dataset_dir) / label
@@ -136,24 +138,26 @@ def extract_features(
         )
         print(f"Class: {label} ({len(paths)} images)")
         for path in paths:
-            image = cv2.imread(str(path))
-            if image is None:
-                warnings.warn(f"Skipping unreadable image: {path}", stacklevel=2)
-                continue
-            features = extract_features_from_image(image, path.name, label, save_images)
-            if features is None:
-                warnings.warn(f"Skipping image with no valid contours: {path}", stacklevel=2)
-                continue
-            rows.append([*features, label])
+            with failures.track(path, label):
+                image = cv2.imread(str(path))
+                if image is None:
+                    failures.record(path, label, ValueError(f"Skipping unreadable image: {path}"))
+                    warnings.warn(f"Skipping unreadable image: {path}", stacklevel=2)
+                    continue
+                features = extract_features_from_image(image, path.name, label, save_images)
+                if features is None:
+                    failures.record(path, label, ValueError(f"Skipping image with no valid contours: {path}"))
+                    warnings.warn(f"Skipping image with no valid contours: {path}", stacklevel=2)
+                    continue
+                rows.append([*features, image_id(path, dataset_dir), label])
 
     if not rows:
         raise ValueError("No valid geometric features were extracted; CSV was not written")
-    frame = pd.DataFrame(rows, columns=[*FEATURE_NAMES, "Class"])
+    frame = pd.DataFrame(rows, columns=[*FEATURE_NAMES, "image_id", "Class"])
     if standardize:
         from sklearn.preprocessing import StandardScaler
 
         frame[FEATURE_NAMES] = StandardScaler().fit_transform(frame[FEATURE_NAMES])
-    output_path = Path(features_dir) / "Geometric_shape_features.csv"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     frame.to_csv(output_path, index=False)
     return frame

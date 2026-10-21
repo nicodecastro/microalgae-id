@@ -87,7 +87,7 @@ def test_export_raw_and_default_scaled_values(tmp_path):
         raw[glcm_features.PROPERTIES].to_numpy(),
         np.array([features for features, _ in expected_rows]),
     )
-    assert raw.columns.tolist() == [*glcm_features.PROPERTIES, "Class"]
+    assert raw.columns.tolist() == [*glcm_features.PROPERTIES, "image_id", "Class"]
     assert raw["Class"].tolist() == [label for _, label in expected_rows]
     pd.testing.assert_frame_equal(
         pd.read_csv(features_dir / "GLCM_features.csv"), raw,
@@ -198,7 +198,7 @@ def test_both_modes_export_separately_with_same_row_order(tmp_path):
         for prop in glcm_features.PROPERTIES
         for distance in [1, 3, 5]
     ]
-    assert pooled_raw.columns.tolist() == [*expected_names, "Class"]
+    assert pooled_raw.columns.tolist() == [*expected_names, "image_id", "Class"]
     assert pooled_raw["Class"].tolist() == chong["Class"].tolist()
     assert chong_csv.read_bytes() == chong_csv_before
     pd.testing.assert_frame_equal(

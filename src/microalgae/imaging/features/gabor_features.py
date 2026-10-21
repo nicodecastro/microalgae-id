@@ -29,6 +29,7 @@ from scipy.stats import skew, kurtosis
 
 from ._log_gabor_bank import _LogGaborBank, _validate_image
 from ..preprocessing import segment_image, resize_with_padding
+from ..dataset import ExtractionFailureReport, IMAGE_EXTENSIONS, image_id
 
 
 FIRST_ORDER_NAMES = (
@@ -44,7 +45,6 @@ SECOND_ORDER_NAMES = (
 )
 DISTANCES = (1, 3, 5)
 ANGLES = (0, 45, 90, 135)
-IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
 FEATURE_NAMES = [
     name
     for scale in range(1, 5)
@@ -378,12 +378,14 @@ def extract_gabor_features(image, mask, image_name, subfolder_name, save_images,
 
 
 def extract_features(dataset_dir, class_subfolders, features_dir, save_images=False):
-    """Export raw descriptors plus Class, preserving class and directory order.
+    """Export raw descriptors, image_id, and Class in class/directory order.
 
     Grayscale loading, padded 256 x 256 resizing, segmentation with dilation
     size 4, and masking before filtering are unchanged. The former Python
     LogGabor parameter file is a legacy reference and is no longer loaded.
     """
+    export_path = Path(features_dir) / "Gabor_features.csv"
+    failures = ExtractionFailureReport(export_path, dataset_dir)
     rows = []
     lg = None
     for subfolder_name in class_subfolders:
@@ -395,27 +397,27 @@ def extract_features(dataset_dir, class_subfolders, features_dir, save_images=Fa
         print(f"Class: {subfolder_name} ({len(subfolder_images)} images)")
         for image_name in subfolder_images:
             image_path = subfolder_path / image_name
-            try:
-                image = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
-                if image is None:
-                    raise ValueError(f"Failed to load image: {image_path}")
-                image = resize_with_padding(image, (256, 256))
-                mask, _, _ = segment_image(image, dilation_size=4)
-                _, mask, _ = _foreground(image, mask)
-                masked_image = image * mask.astype(image.dtype)
-                if lg is None:
-                    lg = _LogGaborBank()
-                features = extract_gabor_features(
-                    masked_image, mask, image_name, subfolder_name, save_images, lg
-                )
-            except (ValueError, FloatingPointError, OSError, cv2.error) as error:
-                raise type(error)(f"Failed to extract Log-Gabor features from {image_path}: {error}") from error
-            rows.append([*features, subfolder_name])
+            with failures.track(image_path, subfolder_name):
+                try:
+                    image = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
+                    if image is None:
+                        raise ValueError(f"Failed to load image: {image_path}")
+                    image = resize_with_padding(image, (256, 256))
+                    mask, _, _ = segment_image(image, dilation_size=4)
+                    _, mask, _ = _foreground(image, mask)
+                    masked_image = image * mask.astype(image.dtype)
+                    if lg is None:
+                        lg = _LogGaborBank()
+                    features = extract_gabor_features(
+                        masked_image, mask, image_name, subfolder_name, save_images, lg
+                    )
+                except (ValueError, FloatingPointError, OSError, cv2.error) as error:
+                    raise type(error)(f"Failed to extract Log-Gabor features from {image_path}: {error}") from error
+                rows.append([*features, image_id(image_path, dataset_dir), subfolder_name])
 
     if not rows:
         raise ValueError("No supported images found for Log-Gabor feature extraction")
-    df = pd.DataFrame(rows, columns=[*FEATURE_NAMES, "Class"])
-    export_path = Path(features_dir) / "Gabor_features.csv"
+    df = pd.DataFrame(rows, columns=[*FEATURE_NAMES, "image_id", "Class"])
     export_path.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(export_path, index=False)
     return df
