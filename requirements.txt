@@ -6,7 +6,6 @@ pandas
 scikit-image
 scikit-learn
 pyefd==1.8.0
-LogGabor
 phasepack==1.5
 
 # Experiment configuration, training, and plots
