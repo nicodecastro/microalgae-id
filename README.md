@@ -20,7 +20,7 @@ Add images with the button, `Ctrl+O`, or drag-and-drop. Use **Open demo** to ins
 | Path | Purpose |
 | --- | --- |
 | `src/microalgae/imaging/preprocessing/` | Image transformations shared by training and future inference. |
-| `src/microalgae/imaging/features/` | Feature extractors and the LogGabor parameter file. |
+| `src/microalgae/imaging/features/` | Feature extractors, native Log-Gabor bank, and legacy LogGabor parameters. |
 | `src/microalgae/domain/` | Detection and image-result data structures. |
 | `src/microalgae/ui/` | PySide6 desktop prototype. |
 | `training/classifiers/` | Classifier training, tuning, and evaluation. |
@@ -46,3 +46,7 @@ py main.py
 `requirements.txt` covers image processing, feature extraction, classifier training, plotting, utility scripts, and tests. It includes the existing `phasepack==1.5` pin. `main.py` makes the local `src/microalgae` package importable directly. For development tools or other scripts that import `microalgae`, you can also install the package in editable mode with `py -m pip install -e .`.
 
 Run the regression and UI tests with `py -m pytest`. The experiment expects its input feature CSVs under `data/features/` as specified by `configs/training.yaml`.
+
+## Log-Gabor descriptors
+
+Log-Gabor extraction now uses a full-resolution Python port of the MATLAB toolbox cited by Sanchez et al., with four scales and six orientations. It no longer requires the Python LogGabor package. The 964-column feature layout is unchanged, but the filter bank and corrected histogram mode/kurtosis change values: regenerate Gabor feature tables and retrain models when adopting it. See [the extraction notes](docs/log_gabor_features.md) for settings, mask rules, usage, upstream attribution, and reproduction limits.
