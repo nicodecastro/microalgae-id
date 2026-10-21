@@ -1,16 +1,69 @@
+"""964 masked Log-Gabor descriptors following Sanchez (2019) and Bueno (2017).
+
+The default bank is a full-resolution port of the MATLAB toolbox cited by
+Sanchez, not the former Python LogGabor package. See _log_gabor_bank.py for
+the exact profile and upstream provenance. Four magnitude-sum scale images
+each provide 13 first-order and 19 x 3 x 4 second-order statistics.
+
+Bueno's tables contain ambiguous signs, quartile definitions and homogeneity
+formulas. This implementation retains population variance, raw-pixel
+percentiles, base-2 entropy, 16-level per-ROI GLCM quantization, sum variance
+centered on sum entropy, difference variance as a raw second moment, and the
+squared/absolute-difference homogeneity variants. First-order mode uses a
+255-bin histogram; kurtosis is Pearson (not excess). These conventions and
+the chosen filter settings do not establish exact Sanchez experiment parity.
+The paper's separate correlation reduction to 177 features is not performed.
+
+Dataset loading, resizing and segmentation remain project preprocessing.
+Exports are unstandardized. Regenerate existing Gabor CSVs and retrain
+models when adopting this bank and the corrected first-order statistics.
+"""
+
+import os
 from pathlib import Path
+
 import cv2
 import numpy as np
-from scipy.stats import skew, kurtosis, mode
 import pandas as pd
-import os
+from scipy.stats import skew, kurtosis
+
+from ._log_gabor_bank import _LogGaborBank, _validate_image
 from ..preprocessing import segment_image, resize_with_padding
+
+
+FIRST_ORDER_NAMES = (
+    "mean", "mode", "min", "max", "variance", "range", "entropy",
+    "q1", "q2", "q3", "iqr", "asymmetry", "kurtosis",
+)
+SECOND_ORDER_NAMES = (
+    "energy", "variance", "contrast", "dissimilarity", "correlation",
+    "autocorrelation", "entropy", "measure_corr1", "measure_corr2",
+    "cluster_shade", "cluster_prominence", "max_probability", "sum_average",
+    "sum_entropy", "sum_variance", "diff_entropy", "diff_variance",
+    "homogeneity1", "homogeneity2",
+)
+DISTANCES = (1, 3, 5)
+ANGLES = (0, 45, 90, 135)
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
+FEATURE_NAMES = [
+    name
+    for scale in range(1, 5)
+    for name in (
+        [f"S{scale}_1st_{name}" for name in FIRST_ORDER_NAMES]
+        + [
+            f"S{scale}_2nd_{name}_d{distance}_a{angle}"
+            for distance in DISTANCES for angle in ANGLES for name in SECOND_ORDER_NAMES
+        ]
+    )
+]
+
 
 def _foreground(subband, mask):
     """Validate a band and ROI, keeping genuine zero-valued foreground pixels."""
-    img = np.asarray(subband, dtype=np.float64)
-    if img.ndim != 2 or img.size == 0:
-        raise ValueError("subband must be a nonempty 2-D array")
+    img = np.asarray(subband)
+    if img.ndim != 2 or img.size == 0 or img.dtype.kind not in "buif":
+        raise ValueError("subband must be a nonempty 2-D real numeric array")
+    img = img.astype(np.float64, copy=False)
     if mask is None:
         roi = np.ones(img.shape, dtype=bool)
     else:
@@ -26,25 +79,28 @@ def _foreground(subband, mask):
     return img, roi, foreground
 
 
-# Compute first order statistics for each sub-band
-def first_order_features(subband, bins=256, *, mask=None):
+def first_order_features(subband, bins=255, *, mask=None):
     """Compute statistics only over the ROI (all pixels when mask is omitted).
 
-    Constant/single-pixel ROIs use zero skewness and excess kurtosis as a
+    Mode is the lowest modal bin's center (the actual value for constants).
+    Constant/single-pixel ROIs use zero skewness and Pearson kurtosis as a
     finite convention, since these standardized moments are undefined there.
     """
+    if isinstance(bins, (bool, np.bool_)) or not isinstance(bins, (int, np.integer)) or bins < 2:
+        raise ValueError("bins must be an integer >= 2")
     _, _, flat = _foreground(subband, mask)
 
     # Basic stats
     mean = np.mean(flat)
-    mode_val = mode(flat, keepdims=False).mode
     minimum = np.min(flat)
     maximum = np.max(flat)
     variance = np.var(flat)
     value_range = maximum - minimum
 
     # Entropy requires probabilities, not histogram probability densities.
-    hist, _ = np.histogram(flat, bins=bins)
+    hist, edges = np.histogram(flat, bins=bins)
+    modal_bin = np.argmax(hist)
+    mode_val = minimum if minimum == maximum else (edges[modal_bin] + edges[modal_bin + 1]) / 2
     probabilities = hist[hist > 0] / hist.sum()
     entropy = -np.sum(probabilities * np.log2(probabilities))
 
@@ -56,9 +112,9 @@ def first_order_features(subband, bins=256, *, mask=None):
 
     # Shape statistics
     asymmetry = skew(flat) if variance > 0 else 0.0
-    kurt = kurtosis(flat) if variance > 0 else 0.0
+    kurt = kurtosis(flat, fisher=False) if variance > 0 else 0.0
 
-    return [
+    features = [
         mean,
         mode_val,
         minimum,
@@ -73,8 +129,11 @@ def first_order_features(subband, bins=256, *, mask=None):
         asymmetry,
         kurt
     ]
-    
-# Compute GLCMs for each sub-band (Bueno et al., 2017 as defined in Sanchez et al., 2019)
+    if not np.isfinite(features).all():
+        raise FloatingPointError("Non-finite first-order Log-Gabor statistics were calculated")
+    return features
+
+
 def compute_glcm_matrices(subband, levels=16, *, mask=None):
     """Build symmetric, normalized GLCMs using pairs with BOTH endpoints in ROI.
 
@@ -91,8 +150,8 @@ def compute_glcm_matrices(subband, levels=16, *, mask=None):
         scaled = (foreground - minimum) / (maximum - minimum)
         quantized[roi] = np.floor(np.clip(scaled, 0, 1) * (levels - 1)).astype(np.int64)
 
-    distances = [1, 3, 5] # 1, 3, 5 pixels
-    angles = [0, np.pi/4, np.pi/2, 3*np.pi/4] # 0, 45, 90, 135
+    distances = DISTANCES
+    angles = np.deg2rad(ANGLES)
 
     glcms = np.zeros((levels, levels, len(distances), len(angles)), dtype=np.float64)
     height, width = img.shape
@@ -162,7 +221,7 @@ def entropy_measures(c, cx, cy):
 
     return HXY1, HXY2
 
-# # Compute features from each GLCM of the sub-bands (Bueno et al., 2017 as defined in Sanchez et al., 2019)
+
 def second_order_features(subband, levels=16, *, mask=None):
     """Return 19 descriptors per offset; offsets without valid pairs use 19 zeros."""
 
@@ -255,142 +314,108 @@ def second_order_features(subband, levels=16, *, mask=None):
                 homogeneity2
             ])
 
+    if not np.isfinite(features).all():
+        raise FloatingPointError("Non-finite second-order Log-Gabor statistics were calculated")
     return features
 
+
 def collapse_orientations(C):
-    # C: (H, W, 6, 4)
-    return np.sum(np.abs(C), axis=2)  # (H, W, 4)
-    
-def extract_gabor_features(image, mask, image_name, subfolder_name, save_images, lg):
-    # Reject failed segmentation before doing the expensive filter transform.
+    """Return four magnitude-sum bands from (H, W, 6, 4) responses."""
+    C = np.asarray(C)
+    if (
+        C.ndim != 4 or not C.size or C.shape[2:] != (6, 4)
+        or C.dtype.kind not in "buifc" or not np.isfinite(C).all()
+    ):
+        raise ValueError("Log-Gabor responses must be a finite numeric (H, W, 6, 4) array")
+    with np.errstate(over="raise", invalid="raise"):
+        return np.sum(np.abs(C.astype(np.complex128, copy=False)), axis=2)
+
+
+def extract_gabor_statistics(image, mask=None, *, lg=None):
+    """Calculate 964 descriptors without preprocessing or file I/O.
+
+    Filtering requires finite real grayscale input. The default bank requires
+    256 x 256 pixels; a supplied lg must expose linear_pyramid(image). The mask
+    selects statistics AFTER filtering; it does not alter image intensities.
+    The dataset wrapper separately preserves its existing pre-filter masking.
+    """
+    image = _validate_image(image)
     _, mask, _ = _foreground(image, mask)
-    # Step 1: Log-Gabor responses
-    C = lg.linear_pyramid(image)  # (H, W, 6, 4)
-
-    # Step 2: collapse orientations → 4 bands
-    G = collapse_orientations(C)  # (H, W, 4)
-
-    mask = np.asarray(mask, dtype=bool)
+    if lg is None:
+        if image.shape != _LogGaborBank.shape:
+            raise ValueError("The native Log-Gabor bank requires a 256 x 256 image; resize before filtering")
+        lg = _LogGaborBank()
+    if not callable(getattr(lg, "linear_pyramid", None)):
+        raise ValueError("lg must expose a callable linear_pyramid(image)")
+    G = collapse_orientations(lg.linear_pyramid(image))
     if mask.shape != G.shape[:2]:
-        raise ValueError(
-            f"Mask shape {mask.shape} does not match response shape {G.shape[:2]}."
-        )
-
-    # Pass the ROI explicitly: zeroing background alone would still count it.
-
+        raise ValueError(f"Mask shape {mask.shape} does not match response shape {G.shape[:2]}")
     features = []
+    for scale in range(4):
+        band = G[:, :, scale]
+        features.extend(first_order_features(band, mask=mask))
+        features.extend(second_order_features(band, mask=mask))
+    result = np.asarray(features, dtype=np.float64)
+    if result.shape != (len(FEATURE_NAMES),) or not np.isfinite(result).all():
+        raise FloatingPointError("Invalid Log-Gabor feature vector was calculated")
+    return result
 
-    # Step 3: feature extraction per scale band
-    for s in range(4):
 
-        subband = G[:, :, s]
-
-        f1 = first_order_features(subband, mask=mask)
-        f2 = second_order_features(subband, mask=mask)
-
-        # FIRST ORDER (13)
-        features.extend(f1)
-
-        # SECOND ORDER (228)
-        features.extend(f2)
-
-        # print("Band", s, "first-order:", len(f1), "second-order:", len(f2))
-
+def extract_gabor_features(image, mask, image_name, subfolder_name, save_images, lg):
+    """Compatibility wrapper around calculation and optional input preview."""
+    try:
+        features = extract_gabor_statistics(image, mask, lg=lg)
+    except (ValueError, FloatingPointError) as error:
+        raise type(error)(f"Cannot extract Log-Gabor features from {image_name}: {error}") from error
     if save_images:
-        success_path = Path(f"data/success/efd/{subfolder_name}")
-        success_path.mkdir(parents=True, exist_ok=True)  # create folder(s) if needed
-        cv2.imwrite(str(os.path.join(success_path, f"{Path(image_name).stem}.jpg")), image)
+        success_path = Path("data") / "success" / "gabor" / subfolder_name
+        success_path.mkdir(parents=True, exist_ok=True)
+        preview_path = success_path / f"{Path(image_name).stem}.jpg"
+        preview = np.rint(np.clip(image, 0, 255)).astype(np.uint8)
+        if not cv2.imwrite(str(preview_path), preview):
+            raise OSError(f"Failed to save Log-Gabor preview: {preview_path}")
+    return features
 
-    return np.array(features)
-  
+
 def extract_features(dataset_dir, class_subfolders, features_dir, save_images=False):
-    from LogGabor import LogGabor
+    """Export raw descriptors plus Class, preserving class and directory order.
 
-    param_path = Path(__file__).with_name('default_param.py')
-    lg = LogGabor(str(param_path))
-
-    # Initialize an empty list to store the feature data
-    feature_data = []
-    labels_data = []
-
-    feature_names = []
-
-    # 13 features
-    first_order_names = [
-        "mean", "mode", "min", "max", "variance",
-        "range", "entropy", "q1", "q2", "q3",
-        "iqr", "asymmetry", "kurtosis"
-    ]
-
-    # SECOND-ORDER (19 features × 3 distances × 4 angles × 4 scales)
-    second_order_names = [
-        "energy",
-        "variance",
-        "contrast",
-        "dissimilarity",
-        "correlation",
-        "autocorrelation",
-        "entropy",
-        "measure_corr1",
-        "measure_corr2",
-        "cluster_shade",
-        "cluster_prominence",
-        "max_probability",
-        "sum_average",
-        "sum_entropy",
-        "sum_variance",
-        "diff_entropy",
-        "diff_variance",
-        "homogeneity1",
-        "homogeneity2"
-    ]
-
-    distances = [1, 3, 5]
-    angles = [0, 45, 90, 135]
-
-    for s in range(1, 5):
-        # Match extraction order: 13 first-order + 228 second-order per scale.
-        for name in first_order_names:
-            feature_names.append(f"S{s}_1st_{name}")
-        for d in distances:
-            for a in angles:
-                for feat in second_order_names:
-                    feature_names.append(f"S{s}_2nd_{feat}_d{d}_a{a}")
-                    
-    # Loop through the subfolders and extract features from each image
+    Grayscale loading, padded 256 x 256 resizing, segmentation with dilation
+    size 4, and masking before filtering are unchanged. The former Python
+    LogGabor parameter file is a legacy reference and is no longer loaded.
+    """
+    rows = []
+    lg = None
     for subfolder_name in class_subfolders:
-        subfolder_path = os.path.join(dataset_dir, subfolder_name)
-        subfolder_images = os.listdir(subfolder_path)
+        subfolder_path = Path(dataset_dir) / subfolder_name
+        subfolder_images = [
+            name for name in os.listdir(subfolder_path)
+            if (subfolder_path / name).is_file() and Path(name).suffix.lower() in IMAGE_EXTENSIONS
+        ]
         print(f"Class: {subfolder_name} ({len(subfolder_images)} images)")
-
-        # Loop over the images in the subfolder and extract the features
         for image_name in subfolder_images:
-            # Load the image
-            image_path = os.path.join(subfolder_path, image_name)
-            image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
-            
-            image = resize_with_padding(image, (256, 256))
-            
-            # Preprocess images based on Sanchez et al. (2024)
-            mask, _, _ = segment_image(image, dilation_size=4)
-            
-            masked_image = image * mask.astype(image.dtype)
-            
-            # Extract the features from the image
-            features = extract_gabor_features(
-                masked_image, mask, image_name, subfolder_name, save_images, lg
-            )
-            feature_data.append(features)
-            labels_data.append(subfolder_name)
-            
-    # Convert the features and labels to a pandas dataframe
-    df = pd.DataFrame(feature_data, columns=feature_names)
-    df['Class'] = labels_data
+            image_path = subfolder_path / image_name
+            try:
+                image = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
+                if image is None:
+                    raise ValueError(f"Failed to load image: {image_path}")
+                image = resize_with_padding(image, (256, 256))
+                mask, _, _ = segment_image(image, dilation_size=4)
+                _, mask, _ = _foreground(image, mask)
+                masked_image = image * mask.astype(image.dtype)
+                if lg is None:
+                    lg = _LogGaborBank()
+                features = extract_gabor_features(
+                    masked_image, mask, image_name, subfolder_name, save_images, lg
+                )
+            except (ValueError, FloatingPointError, OSError, cv2.error) as error:
+                raise type(error)(f"Failed to extract Log-Gabor features from {image_path}: {error}") from error
+            rows.append([*features, subfolder_name])
 
-    # Print the first few rows of the dataframe
-    print(df)
-
-    # Export the DataFrame to a CSV file
+    if not rows:
+        raise ValueError("No supported images found for Log-Gabor feature extraction")
+    df = pd.DataFrame(rows, columns=[*FEATURE_NAMES, "Class"])
     export_path = Path(features_dir) / "Gabor_features.csv"
-    export_path.parent.mkdir(parents=True, exist_ok=True)  # create folder(s) if needed
+    export_path.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(export_path, index=False)
+    return df
