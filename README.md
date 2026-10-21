@@ -55,6 +55,15 @@ separately regenerating keyed tables. Existing ID-less tables are not repaired
 or merged by row order. See [the rollout guide](docs/dataset_identity.md) for
 failure reports, fresh extraction, and strict combination.
 
+## Configured feature extraction
+
+Run `py scripts/extract_features.py --config configs/training.yaml --output-dir data/features_configured/baseline`
+to extract selected features using shared preprocessing and per-family
+overrides. The output directory must be new. No training runs automatically;
+legacy direct extractor calls keep their original preprocessing. See the
+[configured extraction guide](docs/configured_extraction.md) for defaults,
+mask routing, previews, and experiment usage.
+
 ## Log-Gabor descriptors
 
 Log-Gabor extraction now uses a full-resolution Python port of the MATLAB toolbox cited by Sanchez et al., with four scales and six orientations. It no longer requires the Python LogGabor package. The 964-column feature layout is unchanged, but the filter bank and corrected histogram mode/kurtosis change values: regenerate Gabor feature tables and retrain models when adopting it. See [the extraction notes](docs/log_gabor_features.md) for settings, mask rules, usage, upstream attribution, and reproduction limits.
