@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 
 from ..dataset import ExtractionFailureReport, IMAGE_EXTENSIONS, image_id
+from ..preprocessing.configured import prepare_feature_input, save_prepared_input, validate_preprocessing
 
 FEATURE_NAMES = [f"Hu_{index}" for index in range(1, 8)]
 
@@ -64,14 +65,17 @@ def extract_hu_moments(image_path, image_name, subfolder_name, save_images=False
 
 def extract_features(
     dataset_dir, class_subfolders, features_dir, save_images=False, *,
-    standardize=True,
+    standardize=True, preprocessing=None,
 ):
     """Export Hu_1..Hu_7, image_id, and Class; return the DataFrame.
 
     The default keeps the reference's dataset-wide StandardScaler and the
     existing CSV filename. For classifier evaluation, use standardize=False
     and fit a scaler only on training data, inside each validation fold.
+    preprocessing opts into shared preparation; None preserves legacy steps.
     """
+    if preprocessing is not None:
+        preprocessing = validate_preprocessing(preprocessing, "hu")
     output_path = Path(features_dir) / "Hu_moments_nonminmax_features.csv"
     failures = ExtractionFailureReport(output_path, dataset_dir)
     rows = []
@@ -84,10 +88,17 @@ def extract_features(
         print(f"Class: {label} ({len(paths)} images)")
         for path in paths:
             with failures.track(path, label):
-                rows.append([
-                    *extract_hu_moments(path, path.name, label, save_images),
-                    image_id(path, dataset_dir), label,
-                ])
+                if preprocessing is None:
+                    values = extract_hu_moments(path, path.name, label, save_images)
+                else:
+                    image = cv2.imread(str(path), cv2.IMREAD_COLOR)
+                    if image is None:
+                        raise ValueError(f"Failed to load image: {path}")
+                    prepared = prepare_feature_input(image, preprocessing, "hu")
+                    values = extract_hu_moments_from_binary(prepared.image)
+                    if save_images:
+                        save_prepared_input(prepared, features_dir, "hu", image_id(path, dataset_dir))
+                rows.append([*values, image_id(path, dataset_dir), label])
 
     if not rows:
         raise ValueError("No supported images found for Hu moments extraction")

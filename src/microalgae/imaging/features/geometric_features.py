@@ -24,6 +24,7 @@ import numpy as np
 import pandas as pd
 
 from ..dataset import ExtractionFailureReport, IMAGE_EXTENSIONS, image_id
+from ..preprocessing.configured import prepare_feature_input, save_prepared_input, validate_preprocessing
 
 FEATURE_NAMES = [
     "Area", "Perimeter", "Eccentricity", "AspectRatio", "Circularity",
@@ -114,7 +115,7 @@ def extract_features_from_image(image, image_name, subfolder_name, save_images=F
 
 def extract_features(
     dataset_dir, class_subfolders, features_dir, save_images=False, *,
-    standardize=True,
+    standardize=True, preprocessing=None,
 ):
     """Export five geometric columns, image_id, and Class; return the DataFrame.
 
@@ -126,7 +127,11 @@ def extract_features(
     standardize=True reproduces the reference's dataset-wide StandardScaler.
     For model evaluation, choose False and fit a scaler on training folds only.
     An entirely unsuccessful extraction raises before writing a CSV.
+    preprocessing opts into validated shared preparation, bypassing the legacy
+    wrapper. None preserves the existing direct-call behavior.
     """
+    if preprocessing is not None:
+        preprocessing = validate_preprocessing(preprocessing, "geom")
     output_path = Path(features_dir) / "Geometric_shape_features.csv"
     failures = ExtractionFailureReport(output_path, dataset_dir)
     rows = []
@@ -144,7 +149,13 @@ def extract_features(
                     failures.record(path, label, ValueError(f"Skipping unreadable image: {path}"))
                     warnings.warn(f"Skipping unreadable image: {path}", stacklevel=2)
                     continue
-                features = extract_features_from_image(image, path.name, label, save_images)
+                if preprocessing is None:
+                    features = extract_features_from_image(image, path.name, label, save_images)
+                else:
+                    prepared = prepare_feature_input(image, preprocessing, "geom")
+                    features = extract_geometric_features(prepared.image)
+                    if save_images:
+                        save_prepared_input(prepared, features_dir, "geom", image_id(path, dataset_dir))
                 if features is None:
                     failures.record(path, label, ValueError(f"Skipping image with no valid contours: {path}"))
                     warnings.warn(f"Skipping image with no valid contours: {path}", stacklevel=2)

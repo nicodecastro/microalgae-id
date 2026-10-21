@@ -167,7 +167,7 @@ def phase_congruency_features(image, mask=None, *, ddof=0, **parameters):
 
 def extract_features(
     dataset_dir, class_subfolders, features_dir, save_images=False, *,
-    resize=(256, 256), ddof=0, phasecong_parameters=None,
+    resize=(256, 256), ddof=0, phasecong_parameters=None, preprocessing=None,
 ):
     """Extract one row per image and export Phase_congruency_features.csv.
 
@@ -181,11 +181,16 @@ def extract_features(
     preview clipping does not affect the floating-point descriptors.
     phasecong_parameters overrides the four-scale / six-orientation defaults;
     pass {"nscale": 5} to retain the previous scale count.
+    preprocessing opts into shared preparation and takes precedence over the
+    legacy resize argument. Descriptor parameters and ddof remain independent.
     """
     import cv2
     import pandas as pd
     from ..dataset import ExtractionFailureReport, IMAGE_EXTENSIONS, image_id
+    from ..preprocessing.configured import prepare_feature_input, save_prepared_input, validate_preprocessing
 
+    if preprocessing is not None:
+        preprocessing = validate_preprocessing(preprocessing, "pc")
     settings = _validate_phasecong_parameters(
         {} if phasecong_parameters is None else phasecong_parameters
     )
@@ -203,11 +208,16 @@ def extract_features(
             raise ValueError(f"No supported images found in {class_dir}")
         for path in paths:
             with failures.track(path, label):
-                image = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+                image = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE if preprocessing is None else cv2.IMREAD_COLOR)
                 if image is None:
                     raise ValueError(f"Failed to load image: {path}")
                 try:
-                    if resize is not None:
+                    if preprocessing is not None:
+                        prepared = prepare_feature_input(image, preprocessing, "pc")
+                        image = prepared.image
+                        if save_images:
+                            save_prepared_input(prepared, features_dir, "pc", image_id(path, dataset_dir))
+                    elif resize is not None:
                         image = resize_with_padding(image, resize)
                     print(f"Computing pc for {path}")
                     M, m = phase_congruency_moments(image, **settings)

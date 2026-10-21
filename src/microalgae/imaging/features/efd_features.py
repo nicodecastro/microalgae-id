@@ -15,6 +15,7 @@ from pyefd import elliptic_fourier_descriptors
 
 from ..preprocessing import segment_image
 from ..dataset import ExtractionFailureReport, IMAGE_EXTENSIONS, image_id
+from ..preprocessing.configured import prepare_feature_input, save_prepared_input, validate_preprocessing
 
 
 NUM_HARMONICS = 30
@@ -90,13 +91,16 @@ def extract_efd_features(
 
 def extract_features(
     dataset_dir, class_subfolders, features_dir, save_images=False, *,
-    normalize_shape=False,
+    normalize_shape=False, preprocessing=None,
 ):
     """Export 30 amplitudes, image_id, and Class in class and directory order.
 
     Both variants use the existing segmentation and retain unstandardized
     feature columns. Shape-normalized amplitudes are saved to a separate CSV.
+    preprocessing opts into shared preparation and separate mask generation.
     """
+    if preprocessing is not None:
+        preprocessing = validate_preprocessing(preprocessing, "efd")
     filename = (
         "EFD_shape_normalized_features.csv" if normalize_shape else "EFD_features.csv"
     )
@@ -114,13 +118,20 @@ def extract_features(
         for image_name in image_names:
             image_path = class_dir / image_name
             with failures.track(image_path, label):
-                image = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
+                image = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE if preprocessing is None else cv2.IMREAD_COLOR)
                 if image is None:
                     raise ValueError(f"Failed to load image: {image_path}")
-                mask, _, _ = segment_image(image, dilation_size=4)
+                if preprocessing is None:
+                    mask, _, _ = segment_image(image, dilation_size=4)
+                else:
+                    prepared = prepare_feature_input(image, preprocessing, "efd")
+                    mask = prepared.mask
                 features = extract_efd_features(
-                    mask, image_name, label, save_images, normalize_shape=normalize_shape
+                    mask, image_name, label, save_images if preprocessing is None else False,
+                    normalize_shape=normalize_shape,
                 )
+                if preprocessing is not None and save_images:
+                    save_prepared_input(prepared, features_dir, "efd", image_id(image_path, dataset_dir))
                 rows.append([*features, image_id(image_path, dataset_dir), label])
 
     if not rows:

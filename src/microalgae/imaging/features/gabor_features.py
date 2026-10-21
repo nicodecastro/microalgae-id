@@ -30,6 +30,7 @@ from scipy.stats import skew, kurtosis
 from ._log_gabor_bank import _LogGaborBank, _validate_image
 from ..preprocessing import segment_image, resize_with_padding
 from ..dataset import ExtractionFailureReport, IMAGE_EXTENSIONS, image_id
+from ..preprocessing.configured import prepare_feature_input, save_prepared_input, validate_preprocessing
 
 
 FIRST_ORDER_NAMES = (
@@ -377,13 +378,16 @@ def extract_gabor_features(image, mask, image_name, subfolder_name, save_images,
     return features
 
 
-def extract_features(dataset_dir, class_subfolders, features_dir, save_images=False):
+def extract_features(dataset_dir, class_subfolders, features_dir, save_images=False, *, preprocessing=None):
     """Export raw descriptors, image_id, and Class in class/directory order.
 
     Grayscale loading, padded 256 x 256 resizing, segmentation with dilation
     size 4, and masking before filtering are unchanged. The former Python
     LogGabor parameter file is a legacy reference and is no longer loaded.
+    preprocessing opts into shared preparation, avoiding duplicate resizing.
     """
+    if preprocessing is not None:
+        preprocessing = validate_preprocessing(preprocessing, "gabor")
     export_path = Path(features_dir) / "Gabor_features.csv"
     failures = ExtractionFailureReport(export_path, dataset_dir)
     rows = []
@@ -399,18 +403,27 @@ def extract_features(dataset_dir, class_subfolders, features_dir, save_images=Fa
             image_path = subfolder_path / image_name
             with failures.track(image_path, subfolder_name):
                 try:
-                    image = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
+                    image = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE if preprocessing is None else cv2.IMREAD_COLOR)
                     if image is None:
                         raise ValueError(f"Failed to load image: {image_path}")
-                    image = resize_with_padding(image, (256, 256))
-                    mask, _, _ = segment_image(image, dilation_size=4)
-                    _, mask, _ = _foreground(image, mask)
-                    masked_image = image * mask.astype(image.dtype)
+                    if preprocessing is None:
+                        image = resize_with_padding(image, (256, 256))
+                        mask, _, _ = segment_image(image, dilation_size=4)
+                        _, mask, _ = _foreground(image, mask)
+                        masked_image = image * mask.astype(image.dtype)
+                    else:
+                        prepared = prepare_feature_input(image, preprocessing, "gabor")
+                        masked_image, mask = prepared.image, prepared.mask
                     if lg is None:
                         lg = _LogGaborBank()
-                    features = extract_gabor_features(
-                        masked_image, mask, image_name, subfolder_name, save_images, lg
-                    )
+                    if preprocessing is None:
+                        features = extract_gabor_features(
+                            masked_image, mask, image_name, subfolder_name, save_images, lg
+                        )
+                    else:
+                        features = extract_gabor_statistics(masked_image, mask, lg=lg)
+                        if save_images:
+                            save_prepared_input(prepared, features_dir, "gabor", image_id(image_path, dataset_dir))
                 except (ValueError, FloatingPointError, OSError, cv2.error) as error:
                     raise type(error)(f"Failed to extract Log-Gabor features from {image_path}: {error}") from error
                 rows.append([*features, image_id(image_path, dataset_dir), subfolder_name])

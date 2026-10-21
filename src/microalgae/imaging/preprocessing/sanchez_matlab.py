@@ -12,7 +12,7 @@ Pipeline
 4. Hole filling
 5. Erosion with the same structuring element
 6. Select the largest connected component
-7. Crop to bounding box
+7. Preserve the prepared image grid
 8. Contour / edge extraction
  
 Dependencies
@@ -28,7 +28,10 @@ import cv2
 from .resize import resize_with_padding
  
  
-def segment_image(image: np.ndarray, dilation_size: int = 4, save_images: bool = False):
+def segment_image(
+    image: np.ndarray, dilation_size: int = 4, save_images: bool = False, *,
+    resize=(256, 256),
+):
     """
     Parameters
     ----------
@@ -37,16 +40,19 @@ def segment_image(image: np.ndarray, dilation_size: int = 4, save_images: bool =
     dilation_size : int
         Radius (in pixels) of the disk structuring element used for
         both dilation and erosion.  Typical values: 2, 4, 15.
+    resize : tuple or None
+        Preserve the legacy padded 256 x 256 default. Pass None when the input
+        has already been prepared on its final grid.
  
     Returns
     -------
     mask : np.ndarray (bool, 2-D)
-        Binary segmentation mask cropped to the bounding box of the
-        largest connected component.
+        Binary segmentation mask of the largest connected component on the
+        resized grid, or the input grid when resize=None.
     image_cut : np.ndarray
-        Original grayscale image cropped to the same bounding box.
+        Grayscale intensities with background masked out, on the same grid.
     image_contour : np.ndarray (bool, 2-D)
-        Edge / contour image derived from the mask (Canny edges).
+        Edge / contour image derived from the mask (Sobel edges).
  
     Notes
     -----
@@ -58,7 +64,8 @@ def segment_image(image: np.ndarray, dilation_size: int = 4, save_images: bool =
     # ------------------------------------------------------------------
     # 0. Resize & pad
     # ------------------------------------------------------------------
-    image = resize_with_padding(image, (256, 256))
+    if resize is not None:
+        image = resize_with_padding(image, resize)
  
     # ------------------------------------------------------------------
     # 1. Convert to grayscale if necessary

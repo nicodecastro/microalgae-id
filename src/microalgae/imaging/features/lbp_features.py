@@ -15,6 +15,7 @@ from skimage.feature import local_binary_pattern
 from sklearn.preprocessing import StandardScaler
 
 from ..dataset import ExtractionFailureReport, IMAGE_EXTENSIONS, image_id
+from ..preprocessing.configured import prepare_feature_input, save_prepared_input, validate_preprocessing
 
 FEATURE_NAMES = [f"feature_{index}" for index in range(10)]
 
@@ -53,13 +54,16 @@ def extract_lbp_features(
 
 def extract_features(
     dataset_dir, class_subfolders, features_dir, save_images=False, *,
-    standardize=True,
+    standardize=True, preprocessing=None,
 ):
     """Export ten LBP columns, image_id, and Class in input directory order.
 
     The default reproduces the reference's dataset-wide StandardScaler.
     Use ``standardize=False`` to export raw histograms.
+    preprocessing opts into shared preparation without the legacy 512 resize.
     """
+    if preprocessing is not None:
+        preprocessing = validate_preprocessing(preprocessing, "lbp")
     output_path = Path(features_dir) / "LBP_features.csv"
     failures = ExtractionFailureReport(output_path, dataset_dir)
     rows = []
@@ -74,13 +78,19 @@ def extract_features(
         for image_name in image_names:
             image_path = class_dir / image_name
             with failures.track(image_path, label):
-                image = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
+                image = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE if preprocessing is None else cv2.IMREAD_COLOR)
                 if image is None:
                     raise ValueError(f"Failed to load image: {image_path}")
-                resized = cv2.resize(image, (512, 512))
-                hist = extract_lbp_features(
-                    resized, image_name, label, method="uniform", save_images=save_images
-                )
+                if preprocessing is None:
+                    resized = cv2.resize(image, (512, 512))
+                    hist = extract_lbp_features(
+                        resized, image_name, label, method="uniform", save_images=save_images
+                    )
+                else:
+                    prepared = prepare_feature_input(image, preprocessing, "lbp")
+                    hist = extract_lbp_histogram(prepared.image)
+                    if save_images:
+                        save_prepared_input(prepared, features_dir, "lbp", image_id(image_path, dataset_dir))
                 rows.append([*hist, image_id(image_path, dataset_dir), label])
 
     if not rows:

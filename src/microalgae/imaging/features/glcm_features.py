@@ -16,6 +16,7 @@ from skimage.feature import graycomatrix, graycoprops
 from sklearn.preprocessing import StandardScaler
 
 from ..dataset import ExtractionFailureReport, IMAGE_EXTENSIONS, image_id
+from ..preprocessing.configured import prepare_feature_input, save_prepared_input, validate_preprocessing
 
 PROPERTIES = ["contrast", "dissimilarity", "homogeneity", "energy", "correlation"]
 DISTANCES = [1, 3, 5]
@@ -68,15 +69,18 @@ def extract_glcm_features(
 
 def extract_features(
     dataset_dir, class_subfolders, features_dir, save_images=False, *,
-    standardize=True, mode="chong_code",
+    standardize=True, mode="chong_code", preprocessing=None,
 ):
     """Export selected GLCM columns, image_id, and Class in directory order.
 
     The default reproduces the Chong reference and its dataset-wide scaler.
     Orientation pooling exports fifteen features to a separate CSV.
     Use ``standardize=False`` to export raw GLCM properties.
+    preprocessing opts into shared preparation without the legacy 512 resize.
     """
     _validate_mode(mode)
+    if preprocessing is not None:
+        preprocessing = validate_preprocessing(preprocessing, "glcm")
     feature_names = (
         PROPERTIES if mode == "chong_code"
         else [f"{prop}_d{distance}" for prop in PROPERTIES for distance in DISTANCES]
@@ -99,13 +103,19 @@ def extract_features(
         for image_name in image_names:
             image_path = class_dir / image_name
             with failures.track(image_path, label):
-                image = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
+                image = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE if preprocessing is None else cv2.IMREAD_COLOR)
                 if image is None:
                     raise ValueError(f"Failed to load image: {image_path}")
-                resized = cv2.resize(image, (512, 512))
-                features = extract_glcm_features(
-                    resized, image_name, label, PROPERTIES, save_images, mode=mode
-                )
+                if preprocessing is None:
+                    resized = cv2.resize(image, (512, 512))
+                    features = extract_glcm_features(
+                        resized, image_name, label, PROPERTIES, save_images, mode=mode
+                    )
+                else:
+                    prepared = prepare_feature_input(image, preprocessing, "glcm")
+                    features = extract_glcm_statistics(prepared.image, mode=mode)
+                    if save_images:
+                        save_prepared_input(prepared, features_dir, "glcm", image_id(image_path, dataset_dir))
                 rows.append([*features, image_id(image_path, dataset_dir), label])
 
     if not rows:

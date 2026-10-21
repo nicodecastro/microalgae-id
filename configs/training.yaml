@@ -19,18 +19,41 @@ preprocessing:
     padding_color: "black"   # black | mean
 
   filter:
-    enabled: true
+    enabled: false
     method: "bilateral"
     bilateral:
-      params: [7, 25, 7]   # diameter, sigma_color, sigma_space
+      params: [40, 1, 25]   # diameter, sigma_color, sigma_space
 
   threshold:
-    enabled: true
+    enabled: false
     method: "adaptive"
+    adaptive:
+      block_size: 11
+      c: 2
 
   segment:
-    enabled: true
+    enabled: false
     method: "canny"     # "sobel", "canny"
+    canny:
+      thresholds: [150, 175]
+    sobel:
+      ksize: 3
+
+  mask:
+    method: "sanchez"
+    dilation_size: 4
+
+  # Shared defaults above are grayscale-only. These profiles are reference-
+  # inspired; 256 padded resizing is a project choice, not exact reproduction.
+  overrides:
+    geom:
+      segment:
+        enabled: true
+    hu:
+      filter:
+        enabled: true
+      threshold:
+        enabled: true
 
 # ==========================
 # Feature extraction
