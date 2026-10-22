@@ -65,10 +65,15 @@ features:
 # Experiment setup
 # ==========================
 experiment:
-  cross_validation: "5-fold"
-  # save_features: true
-  # save_model: true
   results_dir: "results"
+  models: ["svm", "knn"]
+  outer_folds: 5
+  inner_folds: 5
+  random_state: 42
+  scoring: "f1_macro"
+  n_jobs: -1
+  refit_full_data: true
+  # param_grids: optional per-model replacement grids; otherwise full Chong grids.
 
 # ==========================
 # Logging
