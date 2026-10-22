@@ -34,18 +34,24 @@ Add images with the button, `Ctrl+O`, or drag-and-drop. Use **Open demo** to ins
 
 `data/`, `results/`, and the reference documents are local research assets and are not packaged with `microalgae`.
 
-## Running the existing experiment
+## Running a nested-CV experiment
 
 From the repository root, install the project dependencies with the same Python interpreter you will use to run the experiment:
 
 ```powershell
 py -m pip install -r requirements.txt
-py main.py
+py main.py --config configs/training.yaml --output-dir results/nested_baseline
 ```
 
 `requirements.txt` covers image processing, feature extraction, classifier training, plotting, utility scripts, and tests. It includes the existing `phasepack==1.5` pin. `main.py` makes the local `src/microalgae` package importable directly. For development tools or other scripts that import `microalgae`, you can also install the package in editable mode with `py -m pip install -e .`.
 
-Run the regression and UI tests with `py -m pytest`. The experiment expects its input feature CSVs under `data/features/` as specified by `configs/training.yaml`.
+The output directory must be new. The runner extracts fresh keyed features,
+audits alignment, evaluates SVM and KNN with shared 5×5 nested CV and fold-local
+scaling, then retunes on all data and saves final pipelines. The full grids
+require about 19,700 fits; see [the experiment guide](docs/nested_experiments.md)
+for tiny smoke-test grids, outputs, failure behavior, and reproduction limits.
+Existing feature CSVs and raw images are not overwritten. Run regression and
+UI tests with `py -m pytest`.
 
 ## Dataset identity and keyed feature alignment
 

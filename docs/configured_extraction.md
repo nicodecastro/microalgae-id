@@ -86,7 +86,11 @@ Each run contains the usual feature CSVs and failure ledgers, a
 configuration and the resolved per-family preparation settings. Descriptor
 modes and scaling defaults are unchanged: geometry, Hu, LBP, and GLCM retain
 dataset-wide standardization by default; other exports remain unstandardized.
-This step does not change the evaluation/scaling policy.
+Python callers can pass keyword-only `standardize=False` for raw exports of
+those four families. The snapshot records this flag. The extraction-only
+command preserves the original `True` default; the
+[nested experiment runner](nested_experiments.md) requests raw values and fits
+scaling inside training folds.
 
 With `logging.save_intermediate_images: true`, lossless previews are saved as
 `previews/<family>/<image_id>_image.png`, plus `_mask.png` for EFD/Gabor.
@@ -141,8 +145,8 @@ safety rule belongs to the runner. Omitting `preprocessing`, or passing None,
 preserves legacy preprocessing, numerical defaults, and preview paths. With
 configured PC extraction, preprocessing settings take precedence over the old
 `resize` argument; `ddof` and Phasepack parameter overrides remain independent.
-The existing generic `preprocess_image` function and training entry point are
-unchanged.
+The existing generic `preprocess_image` function is unchanged. Training now has
+a separate [nested experiment entry point](nested_experiments.md).
 
 To compare preprocessing combinations later, copy the configuration dictionary
 or YAML, change explicit family overrides, and use a separate output directory
