@@ -8,6 +8,15 @@ from sklearn.metrics import accuracy_score, confusion_matrix
 from sklearn.inspection import DecisionBoundaryDisplay
 from training.feature_tables import classifier_inputs
 
+def knn_definition():
+  """Return a fresh estimator and the full Chong parameter grid."""
+  return KNeighborsClassifier(), {
+      'n_neighbors': list(range(1, 42, 2)),
+      'weights': ['uniform', 'distance'],
+      'algorithm': ['auto', 'ball_tree', 'kd_tree', 'brute'],
+      'p': [1, 2],
+  }
+
 def run_knn(df):
   # Split the dataset into training and testing sets
   X, y = classifier_inputs(df)
@@ -26,15 +35,7 @@ def run_knn(df):
   print("Number of images for each class in testing set:\n", y_test.value_counts())
 
   # Define the parameter grid for GridSearchCV and RandomizedSearchCV
-  param_grid = {
-      'n_neighbors': [1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31, 33, 35, 37, 39, 41],
-      'weights': ['uniform', 'distance'],
-      'algorithm': ['auto', 'ball_tree', 'kd_tree', 'brute'],
-      'p': [1, 2]
-  }
-
-  # Initialize a K-NN classifier
-  knn = KNeighborsClassifier()
+  knn, param_grid = knn_definition()
 
   # Perform grid search to find the best hyperparameters using k-fold cross validation
   grid_search = GridSearchCV(knn, param_grid, cv=10, n_jobs=-1, verbose=3, refit=True)

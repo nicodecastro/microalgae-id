@@ -9,6 +9,13 @@ import seaborn as sns
 import joblib
 from training.feature_tables import classifier_inputs
 
+def svm_definition():
+  """Return a fresh estimator and the full Chong parameter grid."""
+  return SVC(), {'C': [10**i for i in range(-5, 5)],
+                 'kernel': ['linear', 'poly', 'rbf', 'sigmoid'],
+                 'degree': [2, 3, 4, 5],
+                 'gamma': ['auto', 'scale']}
+
 def run_svm(df):
   # Split the dataset into training and testing sets
   X, y = classifier_inputs(df)
@@ -27,14 +34,9 @@ def run_svm(df):
   print("Number of images for each class in testing set:\n", y_test.value_counts())
 
   # Define the SVM model
-  svm = SVC()
+  svm, param_grid = svm_definition()
 
   # Define the hyperparameters to optimize using GridSearchCV
-  param_grid = {'C': [10**i for i in range(-5,5)],
-                'kernel': ['linear', 'poly', 'rbf','sigmoid'],
-                'degree': [2, 3, 4, 5],
-                'gamma': ['auto', 'scale']}
-
   # Define the GridSearchCV object and fit it to the training data
   # cv=5 is 5-fold cross-validation
   grid_search = GridSearchCV(svm, param_grid, cv=10, n_jobs=-1, verbose=3, refit=True)
