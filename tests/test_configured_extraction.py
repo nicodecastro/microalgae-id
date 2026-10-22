@@ -3,6 +3,7 @@
 from copy import deepcopy
 import hashlib
 from pathlib import Path
+from types import SimpleNamespace
 import subprocess
 import sys
 
@@ -168,3 +169,39 @@ def test_command_returns_nonzero_for_invalid_config(config, tmp_path, capsys):
     assert main(["--config", str(path), "--output-dir", str(tmp_path / "run")]) == 1
     assert "256 x 256" in capsys.readouterr().err
     assert not (tmp_path / "run").exists()
+
+
+@pytest.mark.parametrize("standardize", [True, False])
+def test_standardization_flag_only_routes_to_four_supported_families(config, tmp_path, monkeypatch, standardize):
+    import training.extraction as extraction
+
+    calls = {}
+
+    def module(name):
+        family = next(family for family, suffix in extraction.MODULES.items() if name.endswith("." + suffix))
+
+        def extract(root, classes, output, **kwargs):
+            calls[family] = kwargs
+            frame = pd.DataFrame({"value": [3., 7.], "image_id": ["b/image.png", "a/image.png"], "Class": classes})
+            frame.to_csv(output / FEATURE_FILENAMES[family], index=False)
+            return frame
+
+        return SimpleNamespace(extract_features=extract)
+
+    monkeypatch.setattr(extraction, "import_module", module)
+    output = tmp_path / "flag_test"
+    # Omitting the flag must still forward the original True default.
+    kwargs = {} if standardize else {"standardize": False}
+    extract_configured_features(config, output, **kwargs)
+    for family, options in calls.items():
+        if family in {"geom", "hu", "lbp", "glcm"}:
+            assert options["standardize"] is standardize
+        else:
+            assert "standardize" not in options
+    assert yaml.safe_load((output / "extraction_settings.yaml").read_text())["standardize"] is standardize
+
+
+def test_invalid_standardization_flag_writes_nothing(config, tmp_path):
+    with pytest.raises(ValueError, match="standardize must be Boolean"):
+        extract_configured_features(config, tmp_path / "invalid", standardize="False")
+    assert not (tmp_path / "invalid").exists()

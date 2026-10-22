@@ -24,16 +24,20 @@ def _project_path(value):
     return (path if path.is_absolute() else REPOSITORY_ROOT / path).resolve()
 
 
-def extract_configured_features(config, output_dir):
+def extract_configured_features(config, output_dir, *, standardize=True):
     """Export selected families to a NEW directory and return their DataFrames.
 
     Accept a configuration dictionary so later experiments can reuse this path
     without editing YAML. Existing tables are never overwritten. Preflight
     errors write nothing; extraction errors retain per-image ledgers and an
     audit of all selected tables, then propagate to the caller.
+    ``standardize`` controls only geometry, Hu, LBP, and GLCM exports. Leave
+    it False for fold-local scaling in the experiment runner.
     """
     if not isinstance(config, Mapping):
         raise ValueError("Extraction configuration must be a mapping")
+    if not isinstance(standardize, bool):
+        raise ValueError("standardize must be Boolean")
     selected = config.get("features", {}).get("feature_list")
     if (not isinstance(selected, (list, tuple)) or not selected
             or any(not isinstance(name, str) or name not in MODULES for name in selected)
@@ -56,6 +60,7 @@ def extract_configured_features(config, output_dir):
     snapshot = yaml.safe_dump({
         "configuration": dict(config), "resolved_preprocessing": settings,
         "resolved_dataset_dir": str(root),
+        "standardize": standardize,
     }, sort_keys=False)
     extractors = {
         name: import_module(f"microalgae.imaging.features.{MODULES[name]}").extract_features
@@ -68,9 +73,11 @@ def extract_configured_features(config, output_dir):
     frames = {}
     try:
         for name in selected:
+            options = {"standardize": standardize} if name in {"geom", "hu", "lbp", "glcm"} else {}
             frames[name] = extractors[name](
                 root, dataset["classes"], output_dir, save_images=save_images,
                 preprocessing=settings[name],
+                **options,
             )
     finally:
         issues = audit_feature_tables(manifest, tables)
