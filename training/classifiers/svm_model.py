@@ -1,12 +1,10 @@
 """Train and evaluate SVM classifiers."""
 import pandas as pd
 import numpy as np
-from sklearn.model_selection import train_test_split, GridSearchCV, RandomizedSearchCV, cross_validate
+from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.svm import SVC
 from sklearn.metrics import accuracy_score, confusion_matrix
 import matplotlib.pyplot as plt
-import seaborn as sns
-import joblib
 from training.feature_tables import classifier_inputs
 
 def svm_definition():
@@ -141,9 +139,3 @@ def run_svm(df):
   print("Cross-validation scores:", cv_scores)
   print("Mean cross-validation accuracy: {:.4f}".format(cv_scores.mean()))
   print("Standard deviation of cross-validation accuracy: {:.4f}".format(cv_scores.std()))
-
-  # # grid_search.best_estimator_ is the best model refit on the full training set
-  # best_svm_model = grid_search.best_estimator_
-
-  # # Save it to disk
-  # joblib.dump(best_svm_model, 'best_svm_model.pkl')

@@ -2,10 +2,9 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from sklearn.model_selection import train_test_split, GridSearchCV, RandomizedSearchCV
+from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.metrics import accuracy_score, confusion_matrix
-from sklearn.inspection import DecisionBoundaryDisplay
 from training.feature_tables import classifier_inputs
 
 def knn_definition():
@@ -34,7 +33,7 @@ def run_knn(df):
   print("Number of images for each class in training set:\n", y_train.value_counts())
   print("Number of images for each class in testing set:\n", y_test.value_counts())
 
-  # Define the parameter grid for GridSearchCV and RandomizedSearchCV
+  # Define the parameter grid for GridSearchCV
   knn, param_grid = knn_definition()
 
   # Perform grid search to find the best hyperparameters using k-fold cross validation

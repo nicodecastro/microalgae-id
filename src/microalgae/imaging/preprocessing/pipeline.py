@@ -5,8 +5,6 @@ from .adaptive import adaptive_threshold
 from .canny import canny
 from .sobel import sobel
 
-import numpy as np
-
 
 def preprocess_image(
     image,

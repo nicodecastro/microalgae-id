@@ -21,7 +21,7 @@ Dependencies
 """
  
 import numpy as np
-from skimage import color, filters, morphology, measure
+from skimage import color, filters, measure
 from skimage.morphology import disk, binary_dilation, binary_erosion
 from scipy.ndimage import binary_fill_holes
 import cv2
@@ -140,25 +140,6 @@ def segment_image(
     # Apply mask to original grayscale image (fixed 256x256 canvas)
     image_cut = gray * mask.astype(np.float64)
  
-    # # ------------------------------------------------------------------
-    # # 8. Crop to bounding box
-    # #    MATLAB: statsBB(index).BoundingBox  →  regionprops BoundingBox
-    # #    skimage BoundingBox: (min_row, min_col, max_row, max_col)
-    # #    We also need to crop the *original* grayscale (un-padded) image,
-    # #    so we first remove the padding from both the mask and the coords.
-    # # ------------------------------------------------------------------
-    # min_row, min_col, max_row, max_col = largest.bbox
- # 
-    # # Crop mask and remove the padding we added earlier
-    # mask = mask_full[min_row:max_row, min_col:max_col]
- # 
-    # # Map bounding-box coordinates back to the un-padded gray image
-    # orig_min_row = max(min_row - pad, 0)
-    # orig_min_col = max(min_col - pad, 0)
-    # orig_max_row = max_row - pad
-    # orig_max_col = max_col - pad
- # 
-    # image_cut = gray[orig_min_row:orig_max_row, orig_min_col:orig_max_col]
  
     # ------------------------------------------------------------------
     # 9. Contour / edge extraction
