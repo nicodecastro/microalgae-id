@@ -1,6 +1,7 @@
 """Regression tests for ROI statistics and spatially masked GLCMs."""
 
 from types import SimpleNamespace
+import os
 from pathlib import Path
 
 import cv2
@@ -215,7 +216,7 @@ def test_dataset_preserves_class_directory_order_and_binary_mask_encodings(tmp_p
         assert cv2.imwrite(str(path / "a.PNG"), np.full((256, 256), 2, dtype=np.uint8))
         (path / "ignored.txt").touch()
         (path / "directory.png").mkdir()
-    monkeypatch.setattr(gabor.os, "listdir", lambda path: ["b.png", "ignored.txt", "directory.png", "a.PNG"])
+    monkeypatch.setattr(os, "listdir", lambda path: ["b.png", "ignored.txt", "directory.png", "a.PNG"])
     frame = gabor.extract_features(tmp_path / "raw", ["z", "a"], tmp_path / "output")
     assert frame.Class.tolist() == ["z", "z", "a", "a"]
     # Resizing the rectangular image pads one third of its 256 x 256 canvas.

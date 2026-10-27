@@ -6,16 +6,14 @@ mode averages each property over angles separately at each distance. Neither
 mode applies the Log-Gabor foreground mask.
 """
 
-import os
 from pathlib import Path
 
 import cv2
 import numpy as np
-import pandas as pd
 from skimage.feature import graycomatrix, graycoprops
-from sklearn.preprocessing import StandardScaler
 
-from ..dataset import ExtractionFailureReport, IMAGE_EXTENSIONS, image_id
+from ..dataset import image_id
+from ._export import export_feature_table
 from ..preprocessing.configured import prepare_feature_input, save_prepared_input, validate_preprocessing
 
 PROPERTIES = ["contrast", "dissimilarity", "homogeneity", "energy", "correlation"]
@@ -89,43 +87,29 @@ def extract_features(
         "GLCM_features.csv" if mode == "chong_code"
         else "GLCM_orientation_pooled_features.csv"
     )
-    output_path = Path(features_dir) / filename
-    failures = ExtractionFailureReport(output_path, dataset_dir)
-    rows = []
-    for label in class_subfolders:
-        class_dir = Path(dataset_dir) / label
-        image_names = [
-            name for name in os.listdir(class_dir)
-            if (class_dir / name).is_file()
-            and Path(name).suffix.lower() in IMAGE_EXTENSIONS
-        ]
-        print(f"Class: {label} ({len(image_names)} images)")
-        for image_name in image_names:
-            image_path = class_dir / image_name
-            with failures.track(image_path, label):
-                image = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE if preprocessing is None else cv2.IMREAD_COLOR)
-                if image is None:
-                    raise ValueError(f"Failed to load image: {image_path}")
-                if preprocessing is None:
-                    resized = cv2.resize(image, (512, 512))
-                    features = extract_glcm_features(
-                        resized, image_name, label, PROPERTIES, save_images, mode=mode
-                    )
-                else:
-                    prepared = prepare_feature_input(image, preprocessing, "glcm")
-                    features = extract_glcm_statistics(prepared.image, mode=mode)
-                    if save_images:
-                        save_prepared_input(prepared, features_dir, "glcm", image_id(image_path, dataset_dir))
-                rows.append([*features, image_id(image_path, dataset_dir), label])
 
-    if not rows:
-        raise ValueError("No supported images found for GLCM feature extraction")
+    def extract_image(path, label):
+        image = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE if preprocessing is None else cv2.IMREAD_COLOR)
+        if image is None:
+            raise ValueError(f"Failed to load image: {path}")
+        if preprocessing is None:
+            resized = cv2.resize(image, (512, 512))
+            features = extract_glcm_features(
+                resized, path.name, label, PROPERTIES, save_images, mode=mode
+            )
+        else:
+            prepared = prepare_feature_input(image, preprocessing, "glcm")
+            features = extract_glcm_statistics(prepared.image, mode=mode)
+            if save_images:
+                save_prepared_input(prepared, features_dir, "glcm", image_id(path, dataset_dir))
+        return features
 
-    frame = pd.DataFrame(rows, columns=[*feature_names, "image_id", "Class"])
-    if standardize:
-        frame[feature_names] = StandardScaler().fit_transform(frame[feature_names])
-
+    frame = export_feature_table(
+        dataset_dir, class_subfolders, Path(features_dir) / filename,
+        feature_names, extract_image,
+        empty_message="No supported images found for GLCM feature extraction",
+        standardize=standardize,
+        sort_paths=False,
+    )
     print(frame)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    frame.to_csv(output_path, index=False)
     return frame

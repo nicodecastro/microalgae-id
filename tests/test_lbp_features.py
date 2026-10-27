@@ -1,5 +1,7 @@
 """Chong-style LBP descriptor and export regression checks."""
 
+import os
+
 import cv2
 import numpy as np
 import pandas as pd
@@ -70,7 +72,7 @@ def test_export_raw_and_default_scaled_values(tmp_path):
     expected_rows = []
     for label in ["first", "second"]:
         class_dir = dataset / label
-        for name in lbp.os.listdir(class_dir):
+        for name in os.listdir(class_dir):
             if name.endswith(".png"):
                 image = cv2.imread(str(class_dir / name), cv2.IMREAD_GRAYSCALE)
                 expected_rows.append((reference_histogram(cv2.resize(image, (512, 512))), label))

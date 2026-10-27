@@ -115,6 +115,20 @@ families or datasets. The extraction command itself never combines tables.
 
 ## Python use and compatibility
 
+All seven feature families use the shared dataset export module in
+`src/microalgae/imaging/features/_export.py`. It owns traversal, image IDs,
+failure ledgers, optional dataset-wide scaling, and feature-table writing.
+Each family's per-image adapter retains its preprocessing, descriptor
+calculation, previews, and exception context. Existing direct calls use this
+same flow, including the separate EFD and GLCM variant filenames.
+
+Filename order remains family-specific: geometry, Hu, and phase congruency
+sort filenames; EFD, Log-Gabor, LBP, and GLCM retain directory order. Geometry
+still records and warns about skipped images. Other errors propagate after
+being recorded. An unsuccessful image attempt leaves any previous feature
+table intact; a successful retry resets the ledger. See the
+[shared export design and verification](shared_feature_export.md).
+
 The runner also accepts a configuration dictionary, making later experiments
 possible without editing the original YAML:
 

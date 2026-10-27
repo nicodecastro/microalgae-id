@@ -1,5 +1,6 @@
 """Equation, contour-invariance, and export checks for EFD amplitudes."""
 
+import os
 from pathlib import Path
 
 import cv2
@@ -150,9 +151,9 @@ def test_exports_keep_raw_values_and_separate_normalized_results(tmp_path, monke
         cv2.ellipse(image, (32, 32), axes, 17, 0, 360, 0, -1)
         assert cv2.imwrite(str(path), image)
     (dataset / "first" / "notes.txt").write_text("ignored")
-    original_listdir = efd.os.listdir
+    original_listdir = os.listdir
     monkeypatch.setattr(
-        efd.os, "listdir",
+        os, "listdir",
         lambda path: ["b.png", "notes.txt", "a.png"] if Path(path) == dataset / "first"
         else original_listdir(path),
     )

@@ -17,13 +17,12 @@ use standardize=False when fitting scaling inside training/CV folds.
 """
 
 from pathlib import Path
-import warnings
 
 import cv2
 import numpy as np
-import pandas as pd
 
-from ..dataset import ExtractionFailureReport, IMAGE_EXTENSIONS, image_id
+from ..dataset import image_id
+from ._export import SkippedImage, export_feature_table
 from ..preprocessing.configured import prepare_feature_input, save_prepared_input, validate_preprocessing
 
 FEATURE_NAMES = [
@@ -132,43 +131,25 @@ def extract_features(
     """
     if preprocessing is not None:
         preprocessing = validate_preprocessing(preprocessing, "geom")
-    output_path = Path(features_dir) / "Geometric_shape_features.csv"
-    failures = ExtractionFailureReport(output_path, dataset_dir)
-    rows = []
-    for label in class_subfolders:
-        class_dir = Path(dataset_dir) / label
-        paths = sorted(
-            path for path in class_dir.iterdir()
-            if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS
-        )
-        print(f"Class: {label} ({len(paths)} images)")
-        for path in paths:
-            with failures.track(path, label):
-                image = cv2.imread(str(path))
-                if image is None:
-                    failures.record(path, label, ValueError(f"Skipping unreadable image: {path}"))
-                    warnings.warn(f"Skipping unreadable image: {path}", stacklevel=2)
-                    continue
-                if preprocessing is None:
-                    features = extract_features_from_image(image, path.name, label, save_images)
-                else:
-                    prepared = prepare_feature_input(image, preprocessing, "geom")
-                    features = extract_geometric_features(prepared.image)
-                    if save_images:
-                        save_prepared_input(prepared, features_dir, "geom", image_id(path, dataset_dir))
-                if features is None:
-                    failures.record(path, label, ValueError(f"Skipping image with no valid contours: {path}"))
-                    warnings.warn(f"Skipping image with no valid contours: {path}", stacklevel=2)
-                    continue
-                rows.append([*features, image_id(path, dataset_dir), label])
 
-    if not rows:
-        raise ValueError("No valid geometric features were extracted; CSV was not written")
-    frame = pd.DataFrame(rows, columns=[*FEATURE_NAMES, "image_id", "Class"])
-    if standardize:
-        from sklearn.preprocessing import StandardScaler
+    def extract_image(path, label):
+        image = cv2.imread(str(path))
+        if image is None:
+            return SkippedImage(f"Skipping unreadable image: {path}")
+        if preprocessing is None:
+            features = extract_features_from_image(image, path.name, label, save_images)
+        else:
+            prepared = prepare_feature_input(image, preprocessing, "geom")
+            features = extract_geometric_features(prepared.image)
+            if save_images:
+                save_prepared_input(prepared, features_dir, "geom", image_id(path, dataset_dir))
+        if features is None:
+            return SkippedImage(f"Skipping image with no valid contours: {path}")
+        return features
 
-        frame[FEATURE_NAMES] = StandardScaler().fit_transform(frame[FEATURE_NAMES])
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    frame.to_csv(output_path, index=False)
-    return frame
+    return export_feature_table(
+        dataset_dir, class_subfolders, Path(features_dir) / "Geometric_shape_features.csv",
+        FEATURE_NAMES, extract_image,
+        empty_message="No valid geometric features were extracted; CSV was not written",
+        standardize=standardize,
+    )

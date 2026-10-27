@@ -1,5 +1,7 @@
 """All seven dataset writers share identity and failure-ledger contracts."""
 
+import os
+
 import cv2
 import numpy as np
 import pandas as pd
@@ -50,6 +52,19 @@ def test_every_export_has_portable_ids_and_empty_success_ledger(dataset, tmp_pat
     pd.testing.assert_frame_equal(frame, pd.read_csv(output))
     assert pd.read_csv(failure_report_path(output)).empty
     assert audit_feature_tables(build_dataset_manifest(dataset, ["b", "a"]), {family: output}).empty
+
+
+@pytest.mark.parametrize("family", EXTRACTORS)
+def test_every_export_retains_its_filename_order(dataset, tmp_path, monkeypatch, family):
+    image = cv2.imread(str(dataset / "b" / "shared.PNG"))
+    assert cv2.imwrite(str(dataset / "b" / "alpha.png"), image)
+    original_listdir = os.listdir
+    monkeypatch.setattr(os, "listdir", lambda path: sorted(original_listdir(path), reverse=True))
+
+    frame = EXTRACTORS[family].extract_features(dataset, ["b", "a"], tmp_path / "features")
+    names = ["alpha.png", "shared.PNG"] if family in ("geom", "hu", "pc") else ["shared.PNG", "alpha.png"]
+    assert frame.image_id.tolist() == [*[f"b/{name}" for name in names], "a/shared.PNG"]
+    assert frame.Class.tolist() == ["b", "b", "a"]
 
 
 @pytest.mark.parametrize("family", EXTRACTORS)

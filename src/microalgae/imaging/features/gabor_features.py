@@ -19,17 +19,16 @@ Exports are unstandardized. Regenerate existing Gabor CSVs and retrain
 models when adopting this bank and the corrected first-order statistics.
 """
 
-import os
 from pathlib import Path
 
 import cv2
 import numpy as np
-import pandas as pd
 from scipy.stats import skew, kurtosis
 
 from ._log_gabor_bank import _LogGaborBank, _validate_image
 from ..preprocessing import segment_image, resize_with_padding
-from ..dataset import ExtractionFailureReport, IMAGE_EXTENSIONS, image_id
+from ..dataset import image_id
+from ._export import export_feature_table
 from ..preprocessing.configured import prepare_feature_input, save_prepared_input, validate_preprocessing
 
 
@@ -388,49 +387,39 @@ def extract_features(dataset_dir, class_subfolders, features_dir, save_images=Fa
     """
     if preprocessing is not None:
         preprocessing = validate_preprocessing(preprocessing, "gabor")
-    export_path = Path(features_dir) / "Gabor_features.csv"
-    failures = ExtractionFailureReport(export_path, dataset_dir)
-    rows = []
     lg = None
-    for subfolder_name in class_subfolders:
-        subfolder_path = Path(dataset_dir) / subfolder_name
-        subfolder_images = [
-            name for name in os.listdir(subfolder_path)
-            if (subfolder_path / name).is_file() and Path(name).suffix.lower() in IMAGE_EXTENSIONS
-        ]
-        print(f"Class: {subfolder_name} ({len(subfolder_images)} images)")
-        for image_name in subfolder_images:
-            image_path = subfolder_path / image_name
-            with failures.track(image_path, subfolder_name):
-                try:
-                    image = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE if preprocessing is None else cv2.IMREAD_COLOR)
-                    if image is None:
-                        raise ValueError(f"Failed to load image: {image_path}")
-                    if preprocessing is None:
-                        image = resize_with_padding(image, (256, 256))
-                        mask, _, _ = segment_image(image, dilation_size=4)
-                        _, mask, _ = _foreground(image, mask)
-                        masked_image = image * mask.astype(image.dtype)
-                    else:
-                        prepared = prepare_feature_input(image, preprocessing, "gabor")
-                        masked_image, mask = prepared.image, prepared.mask
-                    if lg is None:
-                        lg = _LogGaborBank()
-                    if preprocessing is None:
-                        features = extract_gabor_features(
-                            masked_image, mask, image_name, subfolder_name, save_images, lg
-                        )
-                    else:
-                        features = extract_gabor_statistics(masked_image, mask, lg=lg)
-                        if save_images:
-                            save_prepared_input(prepared, features_dir, "gabor", image_id(image_path, dataset_dir))
-                except (ValueError, FloatingPointError, OSError, cv2.error) as error:
-                    raise type(error)(f"Failed to extract Log-Gabor features from {image_path}: {error}") from error
-                rows.append([*features, image_id(image_path, dataset_dir), subfolder_name])
 
-    if not rows:
-        raise ValueError("No supported images found for Log-Gabor feature extraction")
-    df = pd.DataFrame(rows, columns=[*FEATURE_NAMES, "image_id", "Class"])
-    export_path.parent.mkdir(parents=True, exist_ok=True)
-    df.to_csv(export_path, index=False)
-    return df
+    def extract_image(path, label):
+        nonlocal lg
+        try:
+            image = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE if preprocessing is None else cv2.IMREAD_COLOR)
+            if image is None:
+                raise ValueError(f"Failed to load image: {path}")
+            if preprocessing is None:
+                image = resize_with_padding(image, (256, 256))
+                mask, _, _ = segment_image(image, dilation_size=4)
+                _, mask, _ = _foreground(image, mask)
+                masked_image = image * mask.astype(image.dtype)
+            else:
+                prepared = prepare_feature_input(image, preprocessing, "gabor")
+                masked_image, mask = prepared.image, prepared.mask
+            if lg is None:
+                lg = _LogGaborBank()
+            if preprocessing is None:
+                features = extract_gabor_features(
+                    masked_image, mask, path.name, label, save_images, lg
+                )
+            else:
+                features = extract_gabor_statistics(masked_image, mask, lg=lg)
+                if save_images:
+                    save_prepared_input(prepared, features_dir, "gabor", image_id(path, dataset_dir))
+        except (ValueError, FloatingPointError, OSError, cv2.error) as error:
+            raise type(error)(f"Failed to extract Log-Gabor features from {path}: {error}") from error
+        return features
+
+    return export_feature_table(
+        dataset_dir, class_subfolders, Path(features_dir) / "Gabor_features.csv",
+        FEATURE_NAMES, extract_image,
+        empty_message="No supported images found for Log-Gabor feature extraction",
+        sort_paths=False,
+    )

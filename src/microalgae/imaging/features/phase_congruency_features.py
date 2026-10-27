@@ -185,8 +185,8 @@ def extract_features(
     legacy resize argument. Descriptor parameters and ddof remain independent.
     """
     import cv2
-    import pandas as pd
-    from ..dataset import ExtractionFailureReport, IMAGE_EXTENSIONS, image_id
+    from ..dataset import image_id
+    from ._export import export_feature_table
     from ..preprocessing.configured import prepare_feature_input, save_prepared_input, validate_preprocessing
 
     if preprocessing is not None:
@@ -197,46 +197,40 @@ def extract_features(
     if resize is not None:
         from ..preprocessing import resize_with_padding
 
-    rows = []
     output_dir = Path(features_dir)
-    output_path = output_dir / "Phase_congruency_features.csv"
-    failures = ExtractionFailureReport(output_path, dataset_dir)
-    for label in class_subfolders:
-        class_dir = Path(dataset_dir) / label
-        paths = sorted(p for p in class_dir.iterdir() if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS)
-        if not paths:
-            raise ValueError(f"No supported images found in {class_dir}")
-        for path in paths:
-            with failures.track(path, label):
-                image = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE if preprocessing is None else cv2.IMREAD_COLOR)
-                if image is None:
-                    raise ValueError(f"Failed to load image: {path}")
-                try:
-                    if preprocessing is not None:
-                        prepared = prepare_feature_input(image, preprocessing, "pc")
-                        image = prepared.image
-                        if save_images:
-                            save_prepared_input(prepared, features_dir, "pc", image_id(path, dataset_dir))
-                    elif resize is not None:
-                        image = resize_with_padding(image, resize)
-                    print(f"Computing pc for {path}")
-                    M, m = phase_congruency_moments(image, **settings)
-                    rows.append([*_summarize_moments(M, m, None, ddof), image_id(path, dataset_dir), label])
-                except (ValueError, FloatingPointError) as error:
-                    raise type(error)(f"Failed to extract phase congruency from {path}: {error}") from error
-                if save_images:
-                    preview_dir = output_dir / "phase_congruency" / label
-                    preview_dir.mkdir(parents=True, exist_ok=True)
-                    # Windows filenames are case-insensitive: M/m would collide.
-                    for name, moment in (("maximum", M), ("minimum", m)):
-                        preview_path = preview_dir / f"{path.name}_{name}.png"
-                        preview = np.rint(np.clip(moment, 0, 1) * 255).astype(np.uint8)
-                        if not cv2.imwrite(str(preview_path), preview):
-                            raise OSError(f"Failed to save moment preview: {preview_path}")
 
-    if not rows:
-        raise ValueError("No images selected for phase-congruency extraction")
-    frame = pd.DataFrame(rows, columns=[*pc_feature_names, "image_id", "Class"])
-    output_dir.mkdir(parents=True, exist_ok=True)
-    frame.to_csv(output_path, index=False)
-    return frame
+    def extract_image(path, label):
+        image = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE if preprocessing is None else cv2.IMREAD_COLOR)
+        if image is None:
+            raise ValueError(f"Failed to load image: {path}")
+        try:
+            if preprocessing is not None:
+                prepared = prepare_feature_input(image, preprocessing, "pc")
+                image = prepared.image
+                if save_images:
+                    save_prepared_input(prepared, features_dir, "pc", image_id(path, dataset_dir))
+            elif resize is not None:
+                image = resize_with_padding(image, resize)
+            print(f"Computing pc for {path}")
+            M, m = phase_congruency_moments(image, **settings)
+            values = _summarize_moments(M, m, None, ddof)
+        except (ValueError, FloatingPointError) as error:
+            raise type(error)(f"Failed to extract phase congruency from {path}: {error}") from error
+        if save_images:
+            preview_dir = output_dir / "phase_congruency" / label
+            preview_dir.mkdir(parents=True, exist_ok=True)
+            # Windows filenames are case-insensitive: M/m would collide.
+            for name, moment in (("maximum", M), ("minimum", m)):
+                preview_path = preview_dir / f"{path.name}_{name}.png"
+                preview = np.rint(np.clip(moment, 0, 1) * 255).astype(np.uint8)
+                if not cv2.imwrite(str(preview_path), preview):
+                    raise OSError(f"Failed to save moment preview: {preview_path}")
+
+        return values
+
+    return export_feature_table(
+        dataset_dir, class_subfolders, output_dir / "Phase_congruency_features.csv",
+        pc_feature_names, extract_image,
+        empty_message="No images selected for phase-congruency extraction",
+        require_class_images=True,
+    )

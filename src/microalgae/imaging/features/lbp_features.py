@@ -5,16 +5,14 @@ reference's ``hist.sum() + 1e-7`` normalization. The image wrapper keeps
 grayscale loading and 512x512 resizing unchanged.
 """
 
-import os
 from pathlib import Path
 
 import cv2
 import numpy as np
-import pandas as pd
 from skimage.feature import local_binary_pattern
-from sklearn.preprocessing import StandardScaler
 
-from ..dataset import ExtractionFailureReport, IMAGE_EXTENSIONS, image_id
+from ..dataset import image_id
+from ._export import export_feature_table
 from ..preprocessing.configured import prepare_feature_input, save_prepared_input, validate_preprocessing
 
 FEATURE_NAMES = [f"feature_{index}" for index in range(10)]
@@ -64,43 +62,29 @@ def extract_features(
     """
     if preprocessing is not None:
         preprocessing = validate_preprocessing(preprocessing, "lbp")
-    output_path = Path(features_dir) / "LBP_features.csv"
-    failures = ExtractionFailureReport(output_path, dataset_dir)
-    rows = []
-    for label in class_subfolders:
-        class_dir = Path(dataset_dir) / label
-        image_names = [
-            name for name in os.listdir(class_dir)
-            if (class_dir / name).is_file()
-            and Path(name).suffix.lower() in IMAGE_EXTENSIONS
-        ]
-        print(f"Class: {label} ({len(image_names)} images)")
-        for image_name in image_names:
-            image_path = class_dir / image_name
-            with failures.track(image_path, label):
-                image = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE if preprocessing is None else cv2.IMREAD_COLOR)
-                if image is None:
-                    raise ValueError(f"Failed to load image: {image_path}")
-                if preprocessing is None:
-                    resized = cv2.resize(image, (512, 512))
-                    hist = extract_lbp_features(
-                        resized, image_name, label, method="uniform", save_images=save_images
-                    )
-                else:
-                    prepared = prepare_feature_input(image, preprocessing, "lbp")
-                    hist = extract_lbp_histogram(prepared.image)
-                    if save_images:
-                        save_prepared_input(prepared, features_dir, "lbp", image_id(image_path, dataset_dir))
-                rows.append([*hist, image_id(image_path, dataset_dir), label])
 
-    if not rows:
-        raise ValueError("No supported images found for LBP feature extraction")
+    def extract_image(path, label):
+        image = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE if preprocessing is None else cv2.IMREAD_COLOR)
+        if image is None:
+            raise ValueError(f"Failed to load image: {path}")
+        if preprocessing is None:
+            resized = cv2.resize(image, (512, 512))
+            hist = extract_lbp_features(
+                resized, path.name, label, method="uniform", save_images=save_images
+            )
+        else:
+            prepared = prepare_feature_input(image, preprocessing, "lbp")
+            hist = extract_lbp_histogram(prepared.image)
+            if save_images:
+                save_prepared_input(prepared, features_dir, "lbp", image_id(path, dataset_dir))
+        return hist
 
-    frame = pd.DataFrame(rows, columns=[*FEATURE_NAMES, "image_id", "Class"])
-    if standardize:
-        frame[FEATURE_NAMES] = StandardScaler().fit_transform(frame[FEATURE_NAMES])
-
+    frame = export_feature_table(
+        dataset_dir, class_subfolders, Path(features_dir) / "LBP_features.csv",
+        FEATURE_NAMES, extract_image,
+        empty_message="No supported images found for LBP feature extraction",
+        standardize=standardize,
+        sort_paths=False,
+    )
     print(frame)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    frame.to_csv(output_path, index=False)
     return frame

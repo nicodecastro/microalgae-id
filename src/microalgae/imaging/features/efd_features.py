@@ -5,16 +5,15 @@ uses PyEFD's first-harmonic normalization before calculating amplitudes. This
 is an extension: the paper does not specify its size-normalization procedure.
 """
 
-import os
 from pathlib import Path
 
 import cv2
 import numpy as np
-import pandas as pd
 from pyefd import elliptic_fourier_descriptors
 
 from ..preprocessing import segment_image
-from ..dataset import ExtractionFailureReport, IMAGE_EXTENSIONS, image_id
+from ..dataset import image_id
+from ._export import export_feature_table
 from ..preprocessing.configured import prepare_feature_input, save_prepared_input, validate_preprocessing
 
 
@@ -104,41 +103,29 @@ def extract_features(
     filename = (
         "EFD_shape_normalized_features.csv" if normalize_shape else "EFD_features.csv"
     )
-    output_path = Path(features_dir) / filename
-    failures = ExtractionFailureReport(output_path, dataset_dir)
-    rows = []
-    for label in class_subfolders:
-        class_dir = Path(dataset_dir) / label
-        image_names = [
-            name for name in os.listdir(class_dir)
-            if (class_dir / name).is_file()
-            and Path(name).suffix.lower() in IMAGE_EXTENSIONS
-        ]
-        print(f"Class: {label} ({len(image_names)} images)")
-        for image_name in image_names:
-            image_path = class_dir / image_name
-            with failures.track(image_path, label):
-                image = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE if preprocessing is None else cv2.IMREAD_COLOR)
-                if image is None:
-                    raise ValueError(f"Failed to load image: {image_path}")
-                if preprocessing is None:
-                    mask, _, _ = segment_image(image, dilation_size=4)
-                else:
-                    prepared = prepare_feature_input(image, preprocessing, "efd")
-                    mask = prepared.mask
-                features = extract_efd_features(
-                    mask, image_name, label, save_images if preprocessing is None else False,
-                    normalize_shape=normalize_shape,
-                )
-                if preprocessing is not None and save_images:
-                    save_prepared_input(prepared, features_dir, "efd", image_id(image_path, dataset_dir))
-                rows.append([*features, image_id(image_path, dataset_dir), label])
 
-    if not rows:
-        raise ValueError("No supported images found for EFD feature extraction")
+    def extract_image(path, label):
+        image = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE if preprocessing is None else cv2.IMREAD_COLOR)
+        if image is None:
+            raise ValueError(f"Failed to load image: {path}")
+        if preprocessing is None:
+            mask, _, _ = segment_image(image, dilation_size=4)
+        else:
+            prepared = prepare_feature_input(image, preprocessing, "efd")
+            mask = prepared.mask
+        features = extract_efd_features(
+            mask, path.name, label, save_images if preprocessing is None else False,
+            normalize_shape=normalize_shape,
+        )
+        if preprocessing is not None and save_images:
+            save_prepared_input(prepared, features_dir, "efd", image_id(path, dataset_dir))
+        return features
 
-    frame = pd.DataFrame(rows, columns=[*FEATURE_NAMES, "image_id", "Class"])
+    frame = export_feature_table(
+        dataset_dir, class_subfolders, Path(features_dir) / filename,
+        FEATURE_NAMES, extract_image,
+        empty_message="No supported images found for EFD feature extraction",
+        sort_paths=False,
+    )
     print(frame)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    frame.to_csv(output_path, index=False)
     return frame
