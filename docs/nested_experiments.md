@@ -30,10 +30,36 @@ resume mode is provided. Existing feature CSVs are not inputs to this command.
    evaluation. No separate 80/20 holdout, post-tuning CV, or test-set KNN sweep
    runs in this workflow.
 
-This is an image-level protocol. Unknown parent/source groups mean that it
-cannot establish source independence. Changing preprocessing or selecting the
-best feature combination using these outer scores can bias the reported result;
-this runner does not perform that additional selection.
+Changing preprocessing or selecting the best feature combination using these
+outer scores can bias the reported result; this runner does not perform that
+additional selection.
+
+## Dataset independence and grouping
+
+The current baseline uses image-level stratified nested CV and treats input
+images as independent. The dataset owner reports no known related images.
+This is a working assumption: a provenance or duplicate audit has not established
+independence. Unknown parent IDs are a limitation to report, not evidence of
+leakage or a blocker for baseline experiments.
+
+The extraction/training pipeline does not create crops or augmented training
+samples. It preprocesses the supplied images and extracts their descriptors;
+saved previews are not added as samples. Existing dataset relationships, if any,
+remain a separate question.
+
+Different cells belonging to the same species are not, by that fact alone, a
+grouping problem. Duplicates, overlapping crops, or repeated photographs of the
+same specimen can make train/test images dependent and inflate evaluation scores.
+Different specimens from one slide or acquisition session may also share imaging
+conditions; source-level separation matters when claiming generalization to new
+slides or sessions. Image-level scores do not establish that stronger claim.
+
+If relevant source relationships are confirmed, record verified group IDs and
+implement group-aware splitting across outer CV, inner CV, and final tuning.
+The current runner does not implement grouped CV. Do not infer parent links from
+filenames or group images merely because they share a class. A duplicate check
+can strengthen confidence but cannot establish specimen or session independence.
+See [scikit-learn's grouped-CV guidance](https://scikit-learn.org/stable/modules/cross_validation.html#cross-validation-iterators-for-grouped-data).
 
 ## Settings and grids
 

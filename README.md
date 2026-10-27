@@ -53,6 +53,21 @@ for tiny smoke-test grids, outputs, failure behavior, and reproduction limits.
 Existing feature CSVs and raw images are not overwritten. Run regression and
 UI tests with `py -m pytest`.
 
+### Dataset independence assumption
+
+Baseline evaluation treats input images as independent. The dataset owner
+reports no known related images; this remains a working assumption, not a
+verified provenance or duplicate audit. The current pipeline does not create
+crops or augmented training samples, and saved previews are not training data.
+
+Unknown parent IDs do not block baseline experiments. If duplicates, overlapping
+crops, or repeated images of the same specimen are identified, splitting related
+images across folds could inflate scores. Shared slides or sessions also matter
+when claiming performance on new sources. Images belonging to the same species
+are not, by that fact alone, a grouping problem. See the experiment guide's
+[independence assumptions](docs/nested_experiments.md#dataset-independence-and-grouping)
+for limitations and when grouped CV would be needed.
+
 ## Dataset identity and keyed feature alignment
 
 New feature exports include `image_id` before `Class`. Audit tables with
