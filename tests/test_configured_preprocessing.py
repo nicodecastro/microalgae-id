@@ -35,16 +35,21 @@ def sample_image():
 
 def manual_input(image, settings, family):
     """Independent stage sequence using OpenCV, not prepare_feature_input."""
+    content = np.ones(image.shape[:2], dtype=bool)
     resize = settings["resize"]
     if resize["enabled"]:
         pad = 0 if resize["padding_color"] == "black" else image.mean(axis=(0, 1))
-        image = resize_with_padding(image, tuple(resize["target_size"]), pad_color=pad)
+        image, content = resize_with_padding(image, tuple(resize["target_size"]), pad_color=pad, return_content_mask=True)
     image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     if settings["filter"]["enabled"]:
         image = cv2.bilateralFilter(image, *settings["filter"]["bilateral"]["params"])
     mask = None
     if family in ("efd", "gabor"):
-        mask, _, _ = segment_image(image, settings["mask"]["dilation_size"], resize=None)
+        y, x = np.nonzero(content)
+        region = np.s_[y.min():y.max()+1, x.min():x.max()+1]
+        foreground, _, _ = segment_image(image[region], settings["mask"]["dilation_size"], resize=None)
+        mask = np.zeros(image.shape, dtype=bool)
+        mask[region] = foreground
     if settings["threshold"]["enabled"]:
         params = settings["threshold"]["adaptive"]
         image = cv2.adaptiveThreshold(image, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, params["block_size"], params["c"])
@@ -61,6 +66,18 @@ def manual_input(image, settings, family):
     elif family == "efd":
         image = mask.astype(np.uint8) * 255
     return image, mask
+
+
+@pytest.mark.parametrize("family", ["efd", "gabor"])
+def test_pale_cell_mask_excludes_single_pixel_padding(family):
+    image = np.full((222, 223, 3), 245, dtype=np.uint8)
+    cv2.ellipse(image, (112, 111), (70, 15), 45, 0, 360, (200, 200, 200), -1)
+    settings = prep.resolve_preprocessing(load_config(), family)
+    prepared = prep.prepare_feature_input(image, settings, family)
+    _, content = resize_with_padding(image, (256, 256), return_content_mask=True)
+    assert not np.any(prepared.mask & ~content)
+    assert np.count_nonzero(prepared.mask & content) > 1000
+    assert len(efd.extract_efd_features(prepared.mask, "pale.png", "a")) == 30
 
 
 def test_reference_inspired_defaults_and_override_isolation():
@@ -147,7 +164,11 @@ def test_each_stage_runs_once_and_mask_branches_before_edges(monkeypatch):
         def stage(*args, _name=name, _original=original, **kwargs):
             calls.append(_name)
             result = _original(*args, **kwargs)
-            captured[_name] = result.copy()
+            if _name == "resize_with_padding":
+                captured["content"] = result[1]
+                captured[_name] = result[0].copy()
+            else:
+                captured[_name] = result.copy()
             return result
 
         monkeypatch.setattr(prep, name, stage)
@@ -155,7 +176,8 @@ def test_each_stage_runs_once_and_mask_branches_before_edges(monkeypatch):
     def segmentation(image, dilation_size, *, resize):
         calls.append("mask")
         assert resize is None and dilation_size == 2
-        np.testing.assert_array_equal(image, captured["bilateral_filter"])
+        y, x = np.nonzero(captured["content"])
+        np.testing.assert_array_equal(image, captured["bilateral_filter"][y.min():y.max()+1, x.min():x.max()+1])
         mask = np.zeros_like(image, dtype=bool)
         mask[40:200, 40:200] = True
         return mask, image, mask
