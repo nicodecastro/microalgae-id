@@ -1,0 +1,98 @@
+# ==========================
+# Training dataset configuration
+# ==========================
+dataset:
+  raw_dir: "data/raw"
+  features_dir: "data/features"
+  combined_features_dir: "data/combined_features"
+  image_format: [".png",".jpg"]
+  grayscale: true
+  classes: ["m_aeruginosa", "n_fruticosa", "n_palea"]
+
+# ==========================
+# Preprocessing
+# ==========================
+preprocessing:
+  resize:
+    enabled: true
+    target_size: [256, 256]
+    padding_color: "black"   # black | mean
+
+  filter:
+    enabled: false
+    method: "bilateral"
+    bilateral:
+      params: [40, 1, 25]   # diameter, sigma_color, sigma_space
+
+  threshold:
+    enabled: false
+    method: "adaptive"
+    adaptive:
+      block_size: 11
+      c: 2
+
+  segment:
+    enabled: false
+    method: "canny"     # "sobel", "canny"
+    canny:
+      thresholds: [150, 175]
+    sobel:
+      ksize: 3
+
+  mask:
+    method: "sanchez"
+    dilation_size: 4
+
+  # Shared defaults above are grayscale-only. These profiles are reference-
+  # inspired; 256 padded resizing is a project choice, not exact reproduction.
+  overrides:
+    geom:
+      filter:
+        enabled: false
+      threshold:
+        enabled: false
+      segment:
+        enabled: false
+      foreground:
+        enabled: true
+        method: otsu_background_hysteresis
+        min_component_area: 25
+        background:
+          kernel_size: 61
+        hysteresis:
+          low_ratio: 0.65
+          clahe:
+            enabled: false
+            clip_limit: 1.5
+            tile_grid_size: [4, 4]
+    hu:
+      filter:
+        enabled: true
+      threshold:
+        enabled: true
+
+# ==========================
+# Feature extraction
+# ==========================
+features:
+  feature_list: ["efd", "gabor", "geom", "glcm", "hu", "lbp", "pc"]
+
+# ==========================
+# Experiment setup
+# ==========================
+experiment:
+  results_dir: "results"
+  models: ["svm", "knn"]
+  outer_folds: 5
+  inner_folds: 5
+  random_state: 42
+  scoring: "f1_macro"
+  n_jobs: -1
+  refit_full_data: true
+  # param_grids: optional per-model replacement grids; otherwise full Chong grids.
+
+# ==========================
+# Logging
+# ==========================
+logging:
+  save_intermediate_images: true

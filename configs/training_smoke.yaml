@@ -1,0 +1,92 @@
+# ==========================
+# Training dataset configuration
+# ==========================
+dataset:
+  raw_dir: "data/raw"
+  features_dir: "data/features"
+  combined_features_dir: "data/combined_features"
+  image_format: [".png",".jpg"]
+  grayscale: true
+  classes: ["m_aeruginosa", "n_fruticosa", "n_palea"]
+
+# ==========================
+# Preprocessing
+# ==========================
+preprocessing:
+  resize:
+    enabled: true
+    target_size: [256, 256]
+    padding_color: "black"   # black | mean
+
+  filter:
+    enabled: false
+    method: "bilateral"
+    bilateral:
+      params: [40, 1, 25]   # diameter, sigma_color, sigma_space
+
+  threshold:
+    enabled: false
+    method: "adaptive"
+    adaptive:
+      block_size: 11
+      c: 2
+
+  segment:
+    enabled: false
+    method: "canny"     # "sobel", "canny"
+    canny:
+      thresholds: [150, 175]
+    sobel:
+      ksize: 3
+
+  mask:
+    method: "sanchez"
+    dilation_size: 4
+
+  # Shared defaults above are grayscale-only. These profiles are reference-
+  # inspired; 256 padded resizing is a project choice, not exact reproduction.
+  overrides:
+    geom:
+      segment:
+        enabled: true
+    hu:
+      filter:
+        enabled: true
+      threshold:
+        enabled: true
+
+# ==========================
+# Feature extraction
+# ==========================
+features:
+  feature_list: ["efd", "gabor", "geom", "glcm", "hu", "lbp", "pc"]
+
+# ==========================
+# Experiment setup
+# ==========================
+experiment:
+  results_dir: "results"
+  models: ["svm", "knn"]
+  outer_folds: 5
+  inner_folds: 5
+  random_state: 42
+  scoring: "f1_macro"
+  n_jobs: 1
+  refit_full_data: true
+
+  param_grids:
+    svm:
+      C: [1]
+      kernel: ["linear"]
+
+    knn:
+      n_neighbors: [1]
+      weights: ["uniform"]
+      algorithm: ["ball_tree"]
+      p: [2]
+
+# ==========================
+# Logging
+# ==========================
+logging:
+  save_intermediate_images: false

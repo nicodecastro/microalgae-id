@@ -2,6 +2,7 @@
 # Training dataset configuration
 # ==========================
 dataset:
+  parent_groups_csv: "data/parent_groups.csv"  # Required verified image-to-parent mapping.
   raw_dir: "data/raw"
   features_dir: "data/features"
   combined_features_dir: "data/combined_features"

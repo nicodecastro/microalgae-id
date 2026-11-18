@@ -1,0 +1,6 @@
+name: hysteresis
+low_ratio: 0.40
+background_kernel_size: 15
+min_component_area: 160
+max_side: 512
+margin_ratio: 0.1
