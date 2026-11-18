@@ -22,7 +22,7 @@ Dependencies
  
 import numpy as np
 from skimage import color, filters, measure
-from skimage.morphology import disk, binary_dilation, binary_erosion
+from skimage.morphology import dilation, disk, erosion
 from scipy.ndimage import binary_fill_holes
 import cv2
 from .resize import resize_with_padding
@@ -98,7 +98,7 @@ def segment_image(
     #    MATLAB: strel('disk', dilationSize, 8)  →  skimage disk(r)
     # ------------------------------------------------------------------
     se = disk(dilation_size)
-    binary = binary_dilation(binary, footprint=se)
+    binary = dilation(binary, footprint=se, mode='ignore')
  
     # ------------------------------------------------------------------
     # 5. Fill holes
@@ -110,7 +110,7 @@ def segment_image(
     # 6. Erode
     #    MATLAB: imerode(imageBW, se)
     # ------------------------------------------------------------------
-    binary = binary_erosion(binary, footprint=se)
+    binary = erosion(binary, footprint=se, mode='ignore')
  
     # ------------------------------------------------------------------
     # 7. Select the largest connected component
