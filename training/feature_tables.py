@@ -162,7 +162,7 @@ def combine_feature_tables(manifest, feature_tables, output_path=None):
         columns = [name for name in frame if name not in METADATA_COLUMNS]
         block = frame.set_index("image_id").loc[identifiers, columns].reset_index(drop=True)
         blocks.append(block.add_prefix(f"{family}__"))
-    combined = pd.concat(blocks, axis=1)
+    combined = pd.concat(blocks, axis=1).copy()
     combined["image_id"] = identifiers
     combined["Class"] = manifest["Class"].to_numpy()
     if output_path is not None:
