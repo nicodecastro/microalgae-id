@@ -12,7 +12,6 @@ phasepack==1.5
 PyYAML
 joblib
 matplotlib
-seaborn
 
 # Utility scripts and tests
 Pillow
