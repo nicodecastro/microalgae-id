@@ -61,11 +61,41 @@ class MainWindow(QMainWindow):
         self._path_ids: dict[str, str] = {}
         self._build_toolbar()
         self._build_content()
+        crop_menu = self.menuBar().addMenu("Crop review")
+        crop_menu.addAction("Open review batch", self.open_crop_batch)
+        crop_menu.addAction("Detect imported image", self.detect_imported)
         self.statusBar().showMessage("Ready. Images stay on this computer.")
         offline_label = QLabel("OFFLINE · SESSION ONLY")
         offline_label.setObjectName("statusBadge")
         self.statusBar().addPermanentWidget(offline_label)
         self._update_actions()
+
+    def open_crop_batch(self):
+        from microalgae.imaging.crop_review import CropBatch
+        from microalgae.ui.crop_review import CropReviewWindow
+        directory = QFileDialog.getExistingDirectory(self, "Open crop review batch")
+        if directory:
+            try:
+                self.crop_window = CropReviewWindow(CropBatch(directory), self)
+                self.crop_window.show()
+            except Exception as error:
+                QMessageBox.warning(self, "Crop review", str(error))
+
+    def detect_imported(self):
+        from microalgae.imaging.crop_review import CropBatch
+        from microalgae.ui.crop_review import CropReviewWindow
+        index = self.image_list.currentRow()
+        if index < 0 or self._images[index].path is None:
+            return
+        path = self._images[index].path
+        destination, _ = QFileDialog.getSaveFileName(self, "New review directory")
+        if destination:
+            try:
+                batch = CropBatch.prepare(path.parent, destination, files=[path])
+                self.crop_window = CropReviewWindow(batch, self)
+                self.crop_window.show()
+            except Exception as error:
+                QMessageBox.warning(self, "Detection", str(error))
 
     def _build_toolbar(self) -> None:
         toolbar = QToolBar("Image review", self)
