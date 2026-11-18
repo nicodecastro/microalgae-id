@@ -4,8 +4,6 @@
 /data/*
 *.log
 *.csv
-io.py
-metrics.py
 /results
 /tmp
 
