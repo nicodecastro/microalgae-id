@@ -18,13 +18,23 @@ from sklearn.preprocessing import StandardScaler
 import yaml
 
 from training.config import load_config
-from training.evaluation import evaluate_nested_cv, prepare_evaluation, save_split_ids
+from training.evaluation import evaluate_nested_cv, prepare_evaluation as _prepare_evaluation, save_split_ids
 from training.experiments import runner
 from training.extraction import extract_configured_features
 from training.feature_tables import FEATURE_FILENAMES, classifier_inputs
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def prepare_evaluation(settings, labels):
+    counts = {}
+    ids = []
+    for label in labels:
+        i = counts.get(label, 0)
+        ids.append(f"{label}/{i}.png")
+        counts[label] = i + 1
+    return _prepare_evaluation(settings, labels, image_ids=ids, parent_ids=ids)
 
 
 def tiny_settings():
@@ -47,7 +57,7 @@ def frame():
         "family__value": rng.normal(size=30),
         "image_id": [f"{label}/{i}.png" for label in ["c", "a", "b"] for i in range(10)],
         "Class": np.repeat(["c", "a", "b"], 10),
-        "parent_image_id": "",  # Must never enter a scaler or classifier.
+        "parent_image_id": [f"{label}/{i}.png" for label in ["c", "a", "b"] for i in range(10)],  # Must never enter a scaler or classifier.
     })
 
 
@@ -256,6 +266,10 @@ def experiment_config(tmp_path):
             assert cv2.imwrite(str(raw / label / f"{i}.png"), image)
     config["dataset"].update(raw_dir=str(raw), classes=["b", "a"],
                              features_dir=str(tmp_path / "legacy"), combined_features_dir=str(tmp_path / "old_combined"))
+    mapping = tmp_path / "parents.csv"
+    pd.DataFrame({"image_id": [f"{label}/{i}.png" for label in ["b", "a"] for i in range(10)],
+                  "parent_image_id": [f"{label}/{i}.png" for label in ["b", "a"] for i in range(10)]}).to_csv(mapping, index=False)
+    config["dataset"]["parent_groups_csv"] = str(mapping)
     config["features"]["feature_list"] = ["lbp", "glcm"]
     config["experiment"] = tiny_settings()
     config["logging"]["save_intermediate_images"] = True
@@ -322,6 +336,10 @@ def test_failures_keep_status_and_never_train_after_bad_alignment(experiment_con
     monkeypatch.setattr(runner, "evaluate_nested_cv", fail_training)
     if problem == "extraction":
         (Path(config["dataset"]["raw_dir"]) / "a" / "broken.png").touch()
+        mapping_path = Path(config["dataset"]["parent_groups_csv"])
+        mapping = pd.read_csv(mapping_path)
+        mapping.loc[len(mapping)] = ["a/broken.png", "a/broken.png"]
+        mapping.to_csv(mapping_path, index=False)
     elif problem == "alignment":
         original_extract = runner.extract_configured_features
 
@@ -368,3 +386,19 @@ def test_main_requires_output_directory_and_reports_errors(experiment_config, tm
     path.write_text(yaml.safe_dump(experiment_config), encoding="utf-8")
     assert main(["--config", str(path), "--output-dir", str(tmp_path)]) == 1
     assert "must be new" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("problem", ["missing_setting", "missing_image", "blank_parent"])
+def test_parent_mapping_preflight_writes_nothing(experiment_config, tmp_path, problem):
+    config = experiment_config
+    if problem == "missing_setting":
+        del config["dataset"]["parent_groups_csv"]
+    else:
+        path = Path(config["dataset"]["parent_groups_csv"])
+        mapping = pd.read_csv(path)
+        if problem == "missing_image": mapping = mapping.iloc[1:]
+        else: mapping.loc[0, "parent_image_id"] = ""
+        mapping.to_csv(path, index=False)
+    output = tmp_path / "invalid_parents"
+    with pytest.raises(ValueError): runner.run_configured_experiment(config, output)
+    assert not output.exists()

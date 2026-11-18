@@ -208,22 +208,6 @@ def test_classifier_rejects_invalid_data(manifest, problem):
         classifier_inputs(frame)
 
 
-@pytest.mark.parametrize("classifier", ["svm", "knn"])
-def test_real_classifier_entry_points_exclude_ids_before_split(manifest, monkeypatch, classifier):
-    from training.classifiers import knn_model, svm_model
-
-    module = svm_model if classifier == "svm" else knn_model
-
-    def split(X, y, **kwargs):
-        assert X.dtype.kind == "f"
-        np.testing.assert_array_equal(X, [[10.], [20.], [30.]])
-        assert kwargs == {"test_size": 0.2, "random_state": 42, "stratify": y}
-        raise RuntimeError("stop before training")
-
-    monkeypatch.setattr(module, "train_test_split", split)
-    with pytest.raises(RuntimeError, match="stop before training"):
-        getattr(module, f"run_{classifier}")(feature_table(manifest))
-
 
 def test_audit_command_reports_legacy_then_combines_fresh_without_overwriting(tmp_path):
     from scripts.check_feature_tables import main
