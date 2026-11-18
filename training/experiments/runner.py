@@ -9,6 +9,7 @@ import yaml
 from microalgae.imaging.dataset import build_dataset_manifest
 from microalgae.imaging.preprocessing.configured import resolve_preprocessing
 from training.evaluation import evaluate_nested_cv, prepare_evaluation, write_json
+from training.splitting import load_parent_groups
 from training.extraction import MODULES, _project_path, extract_configured_features
 from training.feature_tables import FEATURE_FILENAMES, audit_feature_tables, combine_feature_tables
 
@@ -40,7 +41,12 @@ def run_configured_experiment(config, output_dir):
     missing_classes = set(config["dataset"]["classes"]) - set(manifest.Class)
     if missing_classes:
         raise ValueError(f"No images for configured classes: {sorted(missing_classes)}")
-    plan = prepare_evaluation(config.get("experiment", {}), manifest.Class.to_numpy())
+    mapping_path = config["dataset"].get("parent_groups_csv")
+    if not isinstance(mapping_path, str) or not mapping_path.strip():
+        raise ValueError("dataset.parent_groups_csv is required")
+    manifest = load_parent_groups(manifest, _project_path(mapping_path))
+    plan = prepare_evaluation(config.get("experiment", {}), manifest.Class.to_numpy(),
+                              image_ids=manifest.image_id, parent_ids=manifest.parent_image_id)
     snapshot = yaml.safe_dump({
         "configuration": dict(config), "resolved_dataset_dir": str(root),
         "resolved_preprocessing": preprocessing, "standardize": False,
@@ -62,12 +68,15 @@ def run_configured_experiment(config, output_dir):
         manifest.to_csv(output_dir / "dataset_manifest.csv", index=False)
         feature_dir = output_dir / "features"
         extract_configured_features(config, feature_dir, standardize=False)
+        manifest.to_csv(feature_dir / "dataset_manifest.csv", index=False)
         progress("alignment")
         tables = {name: feature_dir / FEATURE_FILENAMES[name] for name in selected}
         # Use paths, not returned DataFrames, so sibling failure ledgers are checked.
         issues = audit_feature_tables(manifest, tables)
         issues.to_csv(output_dir / "feature_table_audit.csv", index=False)
-        combined = combine_feature_tables(manifest, tables, output_dir / "Combined_features_keyed.csv")
+        combined = combine_feature_tables(manifest, tables)
+        combined.insert(len(combined.columns) - 2, "parent_image_id", manifest.parent_image_id.to_numpy())
+        combined.to_csv(output_dir / "Combined_features_keyed.csv", index=False)
         progress("nested_cv")
         summaries = evaluate_nested_cv(combined, output_dir / "evaluation", plan, progress=progress)
         status["status"] = "completed"

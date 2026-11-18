@@ -2,10 +2,11 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.model_selection import GridSearchCV
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.metrics import accuracy_score, confusion_matrix
 from training.feature_tables import classifier_inputs
+from training.splitting import legacy_splits
 
 def knn_definition():
   """Return a fresh estimator and the full Chong parameter grid."""
@@ -19,7 +20,9 @@ def knn_definition():
 def run_knn(df):
   # Split the dataset into training and testing sets
   X, y = classifier_inputs(df)
-  X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
+  knn, param_grid = knn_definition()
+  train, test, inner = legacy_splits(df, y, knn, param_grid)
+  X_train, X_test, y_train, y_test = X[train], X[test], y[train], y[test]
 
   # Convert y_train and y_test to Pandas Series
   y_train = pd.Series(y_train)
@@ -33,21 +36,21 @@ def run_knn(df):
   print("Number of images for each class in training set:\n", y_train.value_counts())
   print("Number of images for each class in testing set:\n", y_test.value_counts())
 
-  # Define the parameter grid for GridSearchCV
-  knn, param_grid = knn_definition()
-
   # Perform grid search to find the best hyperparameters using k-fold cross validation
-  grid_search = GridSearchCV(knn, param_grid, cv=10, n_jobs=-1, verbose=3, refit=True)
+  grid_search = GridSearchCV(knn, param_grid, cv=inner, n_jobs=-1, verbose=3, refit=True)
+  # TODO(augmentation): Generate image variants only from each fit's training
+  # parents, then extract their features before fitting the scaler/model.
+  # Keep validation/test originals unaugmented; variants inherit parent_image_id.
+  # Never augment the holdout training partition before inner splitting.
   grid_search.fit(X_train, y_train)
 
   # Print the best hyperparameters
   print('Best hyperparameters:', grid_search.best_params_)
 
   # Initialize a K-NN classifier with the best hyperparameters
-  knn = KNeighborsClassifier(**grid_search.best_params_)
+  knn = grid_search.best_estimator_
 
-  # Train the classifier on the training data
-  history = knn.fit(X_train, y_train)
+  # GridSearchCV already refitted the selected classifier on training data.
 
   # Evaluate the classifier on the testing data
   y_pred = knn.predict(X_test)
@@ -81,21 +84,6 @@ def run_knn(df):
   fig.tight_layout()
   plt.show()
 
-  # Visualize the effect of changing the number of neighbors on the accuracy
-  n_neighbors_range = range(1, 21)
-  accuracy_scores = []
-  for n_neighbors in n_neighbors_range:
-      knn = KNeighborsClassifier(n_neighbors=n_neighbors)
-      knn.fit(X_train, y_train)
-      y_pred = knn.predict(X_test)
-      accuracy = accuracy_score(y_test, y_pred)
-      accuracy_scores.append(accuracy)
-
-  plt.plot(n_neighbors_range, accuracy_scores)
-  plt.xlabel('Number of neighbors')
-  plt.ylabel('Accuracy')
-  plt.show()
-
   # Advanced evaluation metrics
   from sklearn.metrics import precision_score, recall_score, f1_score, classification_report
   precision = precision_score(y_test, y_pred, average='macro')
@@ -108,15 +96,9 @@ def run_knn(df):
   print("Classification report: ")
   print(classification)
 
-  from sklearn.model_selection import cross_val_score
-
-  # Initialize a K-NN classifier with the best hyperparameters from grid search
-  knn_best = KNeighborsClassifier(**grid_search.best_params_)
-
-  # Compute k-fold cross-validation scores
-  cv_scores = cross_val_score(knn_best, X_train, y_train, cv=10, scoring='accuracy', n_jobs=-1)
-
-  # Print cross-validation results
-  print("Cross-validation scores:", cv_scores)
-  print("Mean cross-validation accuracy: {:.4f}".format(cv_scores.mean()))
-  print("Standard deviation of cross-validation accuracy: {:.4f}".format(cv_scores.std()))
+  # Summarize the selected candidate's grouped tuning scores without refitting.
+  cv_scores = np.array([grid_search.cv_results_[f"split{i}_test_score"][grid_search.best_index_]
+                        for i in range(len(inner))])
+  print("Grouped tuning scores:", cv_scores)
+  print("Mean grouped tuning accuracy:", cv_scores.mean())
+  print("Standard deviation of grouped tuning accuracy:", cv_scores.std())

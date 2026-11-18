@@ -1,11 +1,12 @@
 """Train and evaluate SVM classifiers."""
 import pandas as pd
 import numpy as np
-from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.model_selection import GridSearchCV
 from sklearn.svm import SVC
 from sklearn.metrics import accuracy_score, confusion_matrix
 import matplotlib.pyplot as plt
 from training.feature_tables import classifier_inputs
+from training.splitting import legacy_splits
 
 def svm_definition():
   """Return a fresh estimator and the full Chong parameter grid."""
@@ -17,7 +18,9 @@ def svm_definition():
 def run_svm(df):
   # Split the dataset into training and testing sets
   X, y = classifier_inputs(df)
-  X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
+  svm, param_grid = svm_definition()
+  train, test, inner = legacy_splits(df, y, svm, param_grid)
+  X_train, X_test, y_train, y_test = X[train], X[test], y[train], y[test]
 
   # Convert y_train and y_test to Pandas Series
   y_train = pd.Series(y_train)
@@ -31,15 +34,17 @@ def run_svm(df):
   print("Number of images for each class in training set:\n", y_train.value_counts())
   print("Number of images for each class in testing set:\n", y_test.value_counts())
 
-  # Define the SVM model
-  svm, param_grid = svm_definition()
 
   # Define the hyperparameters to optimize using GridSearchCV
   # Define the GridSearchCV object and fit it to the training data
-  # cv=5 is 5-fold cross-validation
-  grid_search = GridSearchCV(svm, param_grid, cv=10, n_jobs=-1, verbose=3, refit=True)
+  # Tune on precomputed parent-isolated folds.
+  grid_search = GridSearchCV(svm, param_grid, cv=inner, n_jobs=-1, verbose=3, refit=True)
 
   # Fit the GridSearchCV object to the training data and get the results
+  # TODO(augmentation): Generate image variants only from each fit's training
+  # parents, then extract their features before fitting the scaler/model.
+  # Keep validation/test originals unaugmented; variants inherit parent_image_id.
+  # Never augment the holdout training partition before inner splitting.
   history = grid_search.fit(X_train, y_train)
 
   # Get the index of the best mean test score
@@ -127,15 +132,9 @@ def run_svm(df):
   print("Classification report: ")
   print(classification)
 
-  from sklearn.model_selection import cross_val_score
-
-  # Initialize SVM with the best hyperparameters from GridSearchCV
-  svm_best = SVC(**grid_search.best_params_)
-
-  # Compute 5-fold cross-validation scores on the training set
-  cv_scores = cross_val_score(svm_best, X_train, y_train, cv=10, scoring='accuracy', n_jobs=-1)
-
-  # Print cross-validation results
-  print("Cross-validation scores:", cv_scores)
-  print("Mean cross-validation accuracy: {:.4f}".format(cv_scores.mean()))
-  print("Standard deviation of cross-validation accuracy: {:.4f}".format(cv_scores.std()))
+  # Summarize the selected candidate's grouped tuning scores without refitting.
+  cv_scores = np.array([grid_search.cv_results_[f"split{i}_test_score"][grid_search.best_index_]
+                        for i in range(len(inner))])
+  print("Grouped tuning scores:", cv_scores)
+  print("Mean grouped tuning accuracy:", cv_scores.mean())
+  print("Standard deviation of grouped tuning accuracy:", cv_scores.std())

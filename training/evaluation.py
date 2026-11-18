@@ -18,13 +18,14 @@ from sklearn.metrics import (
     accuracy_score, balanced_accuracy_score, classification_report,
     confusion_matrix, f1_score, get_scorer, precision_score, recall_score,
 )
-from sklearn.model_selection import GridSearchCV, ParameterGrid, StratifiedKFold
+from sklearn.model_selection import GridSearchCV, ParameterGrid
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 from training.classifiers.knn_model import knn_definition
 from training.classifiers.svm_model import svm_definition
 from training.feature_tables import METADATA_COLUMNS, classifier_inputs
+from training.splitting import validate_identity, grouped_folds
 
 
 DEFINITIONS = {"svm": svm_definition, "knn": knn_definition}
@@ -57,9 +58,11 @@ class EvaluationPlan:
     inner: list
     final: list
     labels: np.ndarray
+    image_ids: np.ndarray
+    parent_ids: np.ndarray
 
 
-def prepare_evaluation(experiment, labels):
+def prepare_evaluation(experiment, labels, *, image_ids, parent_ids):
     """Validate settings/grids and construct every split without fitting models."""
     if not isinstance(experiment, Mapping):
         raise ValueError("experiment must be a mapping")
@@ -96,17 +99,14 @@ def prepare_evaluation(experiment, labels):
     if len(np.unique(y)) < 2:
         raise ValueError("CV requires at least two classes")
 
-    def split(values, count, context):
-        classes, counts = np.unique(values, return_counts=True)
-        if counts.min() < count:
-            raise ValueError(f"{context} needs at least {count} images per class; got {dict(zip(classes, counts))}")
-        splitter = StratifiedKFold(count, shuffle=True, random_state=settings["random_state"])
-        return list(splitter.split(np.zeros(len(values)), values))
+    identifiers, parents = validate_identity(image_ids, parent_ids, len(y))
+    def split(values, groups, count, context):
+        return grouped_folds(values, groups, count, settings["random_state"], context)
 
-    outer = split(y, settings["outer_folds"], "Outer CV")
-    inner = [split(y[train], settings["inner_folds"], f"Outer fold {fold} inner CV")
+    outer = split(y, parents, settings["outer_folds"], "Outer CV")
+    inner = [split(y[train], parents[train], settings["inner_folds"], f"Outer fold {fold} inner CV")
              for fold, (train, _) in enumerate(outer, 1)]
-    final = split(y, settings["inner_folds"], "Full-data tuning") if settings["refit_full_data"] else []
+    final = split(y, parents, settings["inner_folds"], "Full-data tuning") if settings["refit_full_data"] else []
     smallest_train = min(len(train) for folds in inner + [final] for train, _ in folds)
     overrides = experiment.get("param_grids", {})
     if not isinstance(overrides, Mapping) or set(overrides) - set(models):
@@ -127,12 +127,13 @@ def prepare_evaluation(experiment, labels):
             if name == "knn" and candidate.n_neighbors > smallest_train:
                 raise ValueError(f"KNN n_neighbors={candidate.n_neighbors} exceeds the smallest CV training set ({smallest_train}); change the grid explicitly")
         specifications[name] = (estimator, grid)
-    return EvaluationPlan(settings, specifications, outer, inner, final, y.copy())
+    return EvaluationPlan(settings, specifications, outer, inner, final, y.copy(), identifiers, parents)
 
 
-def _split_records(folds, indices, identifiers):
+def _split_records(folds, indices, identifiers, parents):
     return [{
         "fold": number,
+        "train_parent_ids": parents[indices[train]], "test_parent_ids": parents[indices[test]],
         "train_indices": indices[train], "test_indices": indices[test],
         "train_ids": identifiers[indices[train]], "test_ids": identifiers[indices[test]],
     } for number, (train, test) in enumerate(folds, 1)]
@@ -141,14 +142,16 @@ def _split_records(folds, indices, identifiers):
 def save_split_ids(plan, identifiers, path):
     """Persist global row indices and image IDs, shared by all selected models."""
     identifiers = np.asarray(identifiers)
+    if not np.array_equal(identifiers, plan.image_ids):
+        raise ValueError("Image IDs do not match evaluation plan")
     indices = np.arange(len(identifiers))
-    outer = _split_records(plan.outer, indices, identifiers)
+    outer = _split_records(plan.outer, indices, identifiers, plan.parent_ids)
     for record, (train, _), inner in zip(outer, plan.outer, plan.inner):
-        record["inner"] = _split_records(inner, train, identifiers)
+        record["inner"] = _split_records(inner, train, identifiers, plan.parent_ids)
     write_json(path, {
         "index_reference": "Combined_features_keyed.csv, zero-based manifest row order",
         "shared_by_models": plan.settings["models"], "outer": outer,
-        "full_data_tuning": _split_records(plan.final, indices, identifiers),
+        "full_data_tuning": _split_records(plan.final, indices, identifiers, plan.parent_ids),
     })
 
 
@@ -203,6 +206,11 @@ def evaluate_nested_cv(frame, output_dir, plan, *, progress=None):
     identifiers = frame.image_id.to_numpy()
     if any(not isinstance(v, str) or not v.strip() for v in identifiers):
         raise ValueError("Nested evaluation requires unique nonblank image_id values")
+    if "parent_image_id" not in frame:
+        raise ValueError("Evaluation requires parent_image_id")
+    ids, parents = validate_identity(identifiers, frame.parent_image_id, len(y))
+    if not np.array_equal(ids, plan.image_ids) or not np.array_equal(parents, plan.parent_ids):
+        raise ValueError("Evaluation identity does not match plan")
     output_dir = Path(output_dir)
     output_dir.mkdir(exist_ok=False)
     save_split_ids(plan, identifiers, output_dir / "splits.json")
@@ -212,7 +220,7 @@ def evaluate_nested_cv(frame, output_dir, plan, *, progress=None):
     write_json(output_dir / "metadata.json", {
         "feature_columns": features, "class_labels": classes, "library_versions": versions,
         "settings": plan.settings, "standardization": "StandardScaler fitted inside each training fold",
-        "source_independence": "Unverified: parent groups are unknown; splits are image-level",
+        "source_independence": "Parent-image groups are isolated in all splits; broader acquisition-source independence is unverified",
     })
 
     def search(name, values, labels, splits, directory):
@@ -223,6 +231,11 @@ def evaluate_nested_cv(frame, output_dir, plan, *, progress=None):
             scoring=plan.settings["scoring"], cv=splits, n_jobs=plan.settings["n_jobs"],
             refit=True, error_score="raise", return_train_score=False,
         )
+        # TODO(augmentation): Generate image variants only from each fit's training
+        # parents, then extract their features before fitting the scaler/model.
+        # Keep validation/test originals unaugmented; variants inherit parent_image_id.
+        # Never augment an outer training partition before inner splitting.
+        # This also applies to outer-training and final deployment refits.
         searcher.fit(values, labels)
         pd.DataFrame(searcher.cv_results_).to_csv(directory / "search_results.csv", index=False)
         selection = {

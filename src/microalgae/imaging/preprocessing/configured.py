@@ -2,7 +2,7 @@
 
 from collections.abc import Mapping
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from numbers import Real
 from pathlib import Path
 
@@ -13,6 +13,7 @@ from .adaptive import adaptive_threshold
 from .bilateral import bilateral_filter
 from .canny import canny
 from .grayscale import to_grayscale
+from .geometry_foreground import CLAHE_PARAMETERS, FOREGROUND_METHODS, geometry_foreground_mask, validate_hysteresis
 from .resize import resize_with_padding
 from .sanchez_matlab import segment_image
 from .sobel import sobel
@@ -27,6 +28,19 @@ DEFAULT_PREPROCESSING = {
     "segment": {"enabled": False, "method": "canny", "canny": {"thresholds": [150, 175]}, "sobel": {"ksize": 3}},
     "mask": {"method": "sanchez", "dilation_size": 4},
 }
+
+
+def _family_defaults(family):
+    defaults = deepcopy(DEFAULT_PREPROCESSING)
+    if family == "geom":
+        defaults["foreground"] = {
+            "enabled": False, "method": "otsu", "min_component_area": 25,
+            "adaptive": {"block_size": 31, "c": 3},
+            "background": {"kernel_size": 61},
+            "hysteresis": {"low_ratio": 0.5,
+                           "clahe": {"enabled": False, "clip_limit": 1.5, "tile_grid_size": [4, 4]}},
+        }
+    return defaults
 
 
 def _merge(defaults, updates, path="preprocessing"):
@@ -55,7 +69,7 @@ def validate_preprocessing(settings, family):
     """Resolve a partial family mapping and validate it before any file writes."""
     if family not in FAMILIES:
         raise ValueError(f"Unknown feature family: {family!r}")
-    settings = _merge(DEFAULT_PREPROCESSING, settings)
+    settings = _merge(_family_defaults(family), settings)
     if settings["grayscale"] is not True:
         raise ValueError("Configured feature extraction requires grayscale=True")
     for name in ("resize", "filter", "threshold", "segment"):
@@ -103,6 +117,31 @@ def validate_preprocessing(settings, family):
             raise ValueError("segment.method must be 'canny' or 'sobel'")
     if family == "efd" and (threshold["enabled"] or edge["enabled"]):
         raise ValueError("EFD consumes its separate mask; threshold/edge image settings are not supported")
+    if family == "geom":
+        foreground = settings["foreground"]
+        if not isinstance(foreground["enabled"], bool):
+            raise ValueError("foreground.enabled must be Boolean")
+        if foreground["enabled"]:
+            if threshold["enabled"] or edge["enabled"]:
+                raise ValueError("Geometry foreground requires disabled threshold/edge stages")
+            if foreground["method"] not in FOREGROUND_METHODS:
+                raise ValueError(f"Unknown foreground.method; expected one of {FOREGROUND_METHODS}")
+            if foreground["method"] == "otsu_background_hysteresis":
+                hysteresis = foreground["hysteresis"]
+                clahe = hysteresis["clahe"]
+                if not isinstance(clahe["enabled"], bool):
+                    raise ValueError("foreground.hysteresis.clahe.enabled must be Boolean")
+                validate_hysteresis(hysteresis["low_ratio"], {k: clahe[k] for k in ("clip_limit", "tile_grid_size")})
+            if foreground["method"] in ("otsu_background", "otsu_background_hysteresis") or foreground["method"] in CLAHE_PARAMETERS:
+                kernel = foreground["background"]["kernel_size"]
+                if not _integer(kernel, 3) or kernel % 2 == 0:
+                    raise ValueError("foreground.background.kernel_size must be an odd integer >= 3")
+            if not _integer(foreground["min_component_area"]):
+                raise ValueError("foreground.min_component_area must be a positive integer")
+            if foreground["method"] == "adaptive":
+                block = foreground["adaptive"]["block_size"]
+                if not _integer(block, 3) or block % 2 == 0 or not _finite(foreground["adaptive"]["c"]):
+                    raise ValueError("foreground.adaptive requires an odd block_size >= 3 and finite c")
     mask = settings["mask"]
     if mask["method"] != "sanchez" or not _integer(mask["dilation_size"]):
         raise ValueError("mask requires method='sanchez' and a positive integer dilation_size")
@@ -121,7 +160,7 @@ def resolve_preprocessing(config, family):
     if config.get("dataset", {}).get("grayscale", True) is not True:
         raise ValueError("Configured feature extraction requires dataset.grayscale=True")
     shared.setdefault("grayscale", True)
-    settings = _merge(_merge(DEFAULT_PREPROCESSING, shared), overrides.get(family, {}))
+    settings = _merge(_merge(_family_defaults(family), shared), overrides.get(family, {}))
     return validate_preprocessing(settings, family)
 
 
@@ -129,6 +168,7 @@ def resolve_preprocessing(config, family):
 class PreparedInput:
     image: np.ndarray
     mask: np.ndarray | None = None
+    intermediates: dict = field(default_factory=dict)
 
 
 def prepare_feature_input(image, settings, family):
@@ -136,21 +176,53 @@ def prepare_feature_input(image, settings, family):
 
     Masks branch from grayscale/denoised intensities, not threshold/edge output.
     The returned image is the exact descriptor input, including pre-masking for
-    Gabor and binary conversion for EFD. Other families receive no inferred ROI.
+    Gabor and binary conversion for EFD. Geometry may explicitly opt into a
+    component mask; other families receive no inferred ROI.
     """
     if image is None or image.dtype != np.uint8 or not image.size or image.ndim not in (2, 3):
         raise ValueError("Expected a nonempty uint8 image")
     resize = settings["resize"]
+    foreground = settings.get("foreground", {}) if family == "geom" else {}
+    use_foreground = foreground.get("enabled", False)
+    needs_content = use_foreground or family in ("efd", "gabor")
+    content_mask = np.ones(image.shape[:2], dtype=bool) if needs_content else None
     if resize["enabled"]:
         pad = 0 if resize["padding_color"] == "black" else image.mean(axis=(0, 1))
-        image = resize_with_padding(image, tuple(resize["target_size"]), pad_color=pad)
+        if needs_content:
+            image, content_mask = resize_with_padding(
+                image, tuple(resize["target_size"]), pad_color=pad, return_content_mask=True,
+            )
+        else:
+            image = resize_with_padding(image, tuple(resize["target_size"]), pad_color=pad)
     image = to_grayscale(image)
+    if use_foreground:
+        intermediates = {}
+        mask = geometry_foreground_mask(
+            image, content_mask, method=foreground["method"],
+            min_component_area=foreground["min_component_area"], **foreground["adaptive"],
+            bilateral_params=settings["filter"]["bilateral"]["params"] if settings["filter"]["enabled"] else None,
+            background_kernel_size=foreground["background"]["kernel_size"], intermediates=intermediates,
+            hysteresis_low_ratio=foreground.get("hysteresis", {}).get("low_ratio", 0.5),
+            hysteresis_clahe_params=(
+                {k: foreground["hysteresis"]["clahe"][k] for k in ("clip_limit", "tile_grid_size")}
+                if foreground["method"] == "otsu_background_hysteresis"
+                and foreground.get("hysteresis", {}).get("clahe", {}).get("enabled", False) else None),
+        )
+        return PreparedInput(mask.astype(np.uint8) * 255, mask, intermediates)
     if settings["filter"]["enabled"]:
         image = bilateral_filter(image, *settings["filter"]["bilateral"]["params"])
     mask = None
     if family in ("efd", "gabor"):
-        mask, _, _ = segment_image(image, dilation_size=settings["mask"]["dilation_size"], resize=None)
-        mask = np.asarray(mask)
+        # Artificial padding must not influence Otsu or become the largest object.
+        rows, columns = np.nonzero(content_mask)
+        region = np.s_[rows.min():rows.max() + 1, columns.min():columns.max() + 1]
+        foreground_mask, _, _ = segment_image(
+            image[region], dilation_size=settings["mask"]["dilation_size"], resize=None,
+        )
+        mask = np.zeros(image.shape, dtype=bool)
+        if foreground_mask.shape != image[region].shape or not np.isfinite(foreground_mask).all():
+            raise ValueError("Sánchez segmentation returned an empty or invalid foreground mask")
+        mask[region] = foreground_mask
         if mask.shape != image.shape or not np.isfinite(mask).all() or not np.any(mask):
             raise ValueError("Sánchez segmentation returned an empty or invalid foreground mask")
         mask = mask != 0
@@ -175,6 +247,7 @@ def save_prepared_input(prepared, features_dir, family, identifier):
     images = [("image", prepared.image)]
     if prepared.mask is not None:
         images.append(("mask", prepared.mask.astype(np.uint8) * 255))
+    images.extend(prepared.intermediates.items())
     for name, image in images:
         output = path.with_name(f"{path.name}_{name}.png")
         if not cv2.imwrite(str(output), image):
