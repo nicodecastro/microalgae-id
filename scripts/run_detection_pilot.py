@@ -386,11 +386,11 @@ def summarize(out,records,rows):
     pd.DataFrame(recalls).to_csv(out/'reference_recall.csv',index=False)
 
 
-def galleries(out,session,rows,predictions,records,ids):
+def galleries(out,session,rows,predictions,records,ids, *, image_reader=read_image):
     from PIL import Image,ImageDraw
     crop_rows=[]; review=[]; links=['# Crop review','', 'Human decisions required: completeness, contamination, colony integrity and ambiguity.','']
     for index,row in enumerate(rows):
-        raw=read_image(session.verify_source(row))
+        raw=image_reader(session.verify_source(row))
         for ci in ids:
             result=next(p for p in predictions if p['candidate']==ci and p['image_id']==row['image_id'])
             scored=next(r for r in records if r['candidate']==ci and r['image_id']==row['image_id'] and r['threshold']==.5)
@@ -408,7 +408,9 @@ def galleries(out,session,rows,predictions,records,ids):
                 parent = Path(row['image_id'])
                 relative = Path('crops')/parent.parent/f'{parent.name}__candidate_{ci:02d}__crop_{pi:03d}.png'
                 (out/relative).parent.mkdir(parents=True, exist_ok=True)
-                if not cv2.imwrite(str(out/relative),crop):raise OSError('Crop save failed')
+                ok, encoded = cv2.imencode('.png', crop)
+                if not ok:raise OSError('Crop save failed')
+                encoded.tofile(out/relative)
                 crop_rows.append(dict(image_id=row['image_id'],parent_image_id=row['image_id'],
                                       crop_image_id=relative.as_posix(),partition=row['partition'],
                                       candidate=ci,prediction=pi,path=relative.as_posix(),**obj))
@@ -423,12 +425,159 @@ def galleries(out,session,rows,predictions,records,ids):
     (out/'review.md').write_text('\n\n'.join(links),encoding='utf-8')
 
 
+class ReviewReferences:
+    """Read-only source resolver for a frozen crop-review snapshot."""
+
+    def __init__(self, directory, data):
+        self.directory = Path(directory).resolve()
+        self.data = data
+        self.root = Path(data['root']).resolve()
+
+    def verify_source(self, row):
+        root = self.directory if row.get('batch_local_source') else self.root
+        relative = row.get('source_path', row['image_id'])
+        path = (root / relative).resolve()
+        if not path.is_relative_to(root) or path == root:
+            raise ValueError('Source path escapes its root')
+        if digest(path) != row['sha256']:
+            raise ValueError(f"Source image changed: {row['image_id']}")
+        return path
+
+
+def review_references(directory):
+    import hashlib
+    from microalgae.imaging.crop_review import read_image as read_review_image
+    path = Path(directory) / 'review.json'
+    payload = path.read_bytes()
+    data = json.loads(payload.decode('utf-8'))
+    if data.get('schema_version') != 1 or not isinstance(data.get('images'), list):
+        raise ValueError('Unsupported crop review')
+    session = ReviewReferences(directory, data)
+    rows, coverage = [], []
+    identifiers = set()
+    for original in data['images']:
+        identifier = original['image_id']
+        if identifier in identifiers:
+            raise ValueError('Duplicate source image ID')
+        identifiers.add(identifier)
+        included = bool(original['reviewed']) and original['status'] != 'failed'
+        coverage.append(dict(image_id=identifier, included=included,
+                             reason='reviewed' if included else original['status'] if original['status']=='failed' else 'not reviewed'))
+        if not included:
+            continue
+        row = deepcopy(original)
+        image = read_review_image(session.verify_source(row))
+        height, width = image.shape[:2]
+        row.update(width=width, height=height, source_folder=original['target'],
+                   partition=original.get('pilot_partition') or 'unassigned', objects=[])
+        crop_ids = set()
+        for crop in original['crops']:
+            if not crop['active'] or crop['decision'] in ('Artifact', 'Reject artifact', 'Discard crop'):
+                continue
+            decision = crop['decision']
+            if decision not in ('Accept target', 'Non-target alga', 'Unsure / mixed'):
+                raise ValueError(f'Unresolved crop on reviewed image: {identifier}')
+            box = crop['box']
+            if (len(box) != 4 or any(type(v) is not int for v in box)
+                    or not 0 <= box[0] < box[2] <= width or not 0 <= box[1] < box[3] <= height):
+                raise ValueError(f'Invalid reference coordinates: {identifier}')
+            if crop['crop_id'] in crop_ids:
+                raise ValueError('Duplicate reference crop ID')
+            crop_ids.add(crop['crop_id'])
+            row['objects'].append(dict(object_id=crop['crop_id'], box=box,
+                uncertain=decision=='Unsure / mixed',
+                species=original['target'] if decision=='Accept target' else 'unknown',
+                kind='unspecified', truncated=box[0]==0 or box[1]==0 or box[2]==width or box[3]==height,
+                review_decision=decision))
+        rows.append(row)
+    if not rows:
+        raise ValueError('No reviewed source images match the selection')
+    if path.read_bytes() != payload:
+        raise ValueError('Review changed while capturing snapshot')
+    return session, rows, coverage, payload, hashlib.sha256(payload).hexdigest()
+
+
+def score_review(directory, output):
+    import hashlib
+    from microalgae.imaging.crop_review import read_image as read_review_image
+    session, rows, coverage, payload, reference_hash = review_references(directory)
+    output = Path(output).resolve()
+    if output.is_relative_to(session.directory) or output.is_relative_to(session.root):
+        raise ValueError('Output must be outside review and source directories')
+    out = fresh(output)
+    write(out/'run_status.json', dict(status='running'))
+    try:
+        (out/'review_snapshot.json').write_bytes(payload)
+        write(out/'references.json', rows)
+        pd.DataFrame(coverage).to_csv(out/'coverage.csv', index=False)
+        candidates = [dict(low_ratio=ratio, background_kernel_size=61, min_component_area=25) for ratio in (.5, .65)]
+        settings = dict(max_side=512, margin_ratio=.1)
+        source_hashes = {row['image_id']: row['sha256'] for row in rows}
+        write(out/'metadata.json', dict(stage='score-review', review_directory=str(session.directory),
+            reference_sha256=reference_hash, settings=settings,
+            candidates=candidates, candidate_names=['control', 'h65'], code_hashes=code_hashes(),
+            source_hashes=source_hashes, reference_policy='Human-reviewed detector proposals; all confirmed algae'))
+        records, predictions, rankings = [], [], []
+        for ci, candidate in enumerate(candidates):
+            print('Scoring', ['control', 'h65'][ci], 'on', len(rows), 'images', flush=True)
+            for row in rows:
+                result = detect_regions(read_review_image(session.verify_source(row)), **candidate, **settings)
+                predictions.append(dict(candidate=ci, image_id=row['image_id'], **result))
+                for threshold in (.5, .75):
+                    scored = score_boxes(result['regions'], row, threshold)
+                    records.append(dict(candidate=ci, image_id=row['image_id'], source_folder=row['source_folder'],
+                        threshold=threshold, **scored, **metrics(scored['tp'], scored['fp'], scored['fn'])))
+            primary = [r for r in records if r['candidate']==ci and r['threshold']==.5]
+            rankings.append(dict(candidate=ci, name=['control', 'h65'][ci], **candidate, **ranking_scores(primary)))
+        write(out/'predictions.json', predictions)
+        write(out/'scores.json', records)
+        pd.DataFrame(rankings).to_csv(out/'rankings.csv', index=False)
+        pd.DataFrame([{k:v for k,v in r.items() if k not in ('matches','ignored_indices')} for r in records]).to_csv(out/'per_image_scores.csv', index=False)
+        summarize(out, records, rows)
+        galleries(out, session, rows, predictions, records, [0, 1], image_reader=read_review_image)
+        import ast
+        verified = 0
+        for crop in pd.read_csv(out/'crop_manifest.csv').itertuples():
+            row = next(r for r in rows if r['image_id']==crop.image_id)
+            image = read_review_image(session.verify_source(row))
+            l,t,r,b = ast.literal_eval(crop.crop_box)
+            assert np.array_equal(image[t:b,l:r], read_review_image(out/crop.path))
+            verified += 1
+        for row in rows:
+            session.verify_source(row)
+        assert hashlib.sha256((out/'review_snapshot.json').read_bytes()).hexdigest()==reference_hash
+        write(out/'verification.json', dict(images=len(rows), candidates=2, score_rows=len(records),
+            crops_pixel_verified=verified, source_hashes_verified=True, frozen_review_hash_verified=True))
+        certain = sum(not o['uncertain'] for row in rows for o in row['objects'])
+        uncertain = sum(o['uncertain'] for row in rows for o in row['objects'])
+        (out/'findings.md').write_text(
+            '# Control and H65 detection comparison\n\n'
+            f'Human-reviewed detector proposals. Included {len(rows)} of {len(coverage)} selected source images. '
+            f'Certain references: {certain}. Uncertain regions: {uncertain}.\n\n'
+            'Candidate 0 is control. Candidate 1 is H65. Scores describe this reviewed subset. '
+            'Zero-positive subsets have no informative recall or F1. See coverage.csv for exclusions.\n\n'
+            + pd.DataFrame(rankings).to_string(index=False), encoding='utf-8')
+        pd.DataFrame(columns=['image_id','error']).to_csv(out/'errors.csv', index=False)
+        write(out/'run_status.json', dict(status='completed'))
+    except Exception as error:
+        write(out/'run_status.json', dict(status='failed', error=str(error)))
+        write(out/'errors.json', [dict(error=str(error))])
+        raise
+    return out
+
+
 def main():
-    p=argparse.ArgumentParser(description=__doc__); p.add_argument('stage',choices=['prepare','develop','evaluate'])
+    p=argparse.ArgumentParser(description=__doc__); p.add_argument('stage',choices=['prepare','develop','evaluate','score-review'])
     p.add_argument('--source-manifest',type=Path);p.add_argument('--session',type=Path);p.add_argument('--references',type=Path);p.add_argument('--config',type=Path)
     p.add_argument('--development-run',type=Path);p.add_argument('--output-dir',type=Path,required=True)
+    p.add_argument('--crop-review', type=Path, help='Review folder containing review.json for score-review')
     a=p.parse_args()
-    if a.stage=='prepare':out=prepare(a.session,a.output_dir,a.source_manifest)
+    if a.stage=='score-review':
+        if a.crop_review is None:p.error('score-review requires --crop-review')
+        if any(value is not None for value in (a.config,a.session,a.references,a.development_run,a.source_manifest)):
+            p.error('score-review uses fixed control/H65 settings and --crop-review references')
+        out=score_review(a.crop_review,a.output_dir)
+    elif a.stage=='prepare':out=prepare(a.session,a.output_dir,a.source_manifest)
     else:out=run(a.stage,a.references,a.output_dir,a.config,a.development_run)
     print('Completed:',out)
 
