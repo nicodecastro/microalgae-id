@@ -3,6 +3,10 @@
 These tests do not imply comparison with an executed MATLAB/Octave runtime.
 """
 
+from importlib.metadata import version
+import json
+from types import SimpleNamespace
+
 import cv2
 import numpy as np
 import pandas as pd
@@ -199,3 +203,41 @@ def test_real_default_dataset_path_reuses_bank_and_exports_raw(tmp_path, monkeyp
     pd.testing.assert_frame_equal(frame, pd.read_csv(tmp_path / "output" / "Gabor_features.csv"))
     assert len(list((tmp_path / "data" / "success" / "gabor").rglob("*.jpg"))) == 2
     assert not (tmp_path / "data" / "success" / "efd").exists()
+
+
+def test_desktop_classifier_builds_one_bank_on_first_use(tmp_path, monkeypatch, bank):
+    from microalgae.imaging import classifier
+
+    columns = [f"gabor__{name}" for name in gabor.FEATURE_NAMES]
+    metadata = {
+        "feature_columns": columns,
+        "estimator_classes": ["species"],
+        "class_labels": ["species"],
+        "library_versions": {"scikit-learn": version("scikit-learn")},
+    }
+    (tmp_path / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+    (tmp_path / "resolved_settings.yaml").write_text(
+        "standardize: false\nresolved_preprocessing:\n  gabor: {}\n", encoding="utf-8",
+    )
+    (tmp_path / "pipeline.joblib").write_bytes(b"test pipeline")
+    monkeypatch.setattr(classifier.joblib, "load", lambda _: SimpleNamespace(
+        predict=lambda features: ["species"], n_features_in_=len(columns), classes_=["species"],
+    ))
+    mask = np.ones(bank.shape, dtype=bool)
+    monkeypatch.setattr(classifier, "prepare_feature_input", lambda image, *_: SimpleNamespace(image=image, mask=mask))
+    built = []
+
+    class BankFactory:
+        shape = bank.shape
+
+        def __new__(cls):
+            built.append(1)
+            return bank
+
+    monkeypatch.setattr(gabor, "_LogGaborBank", BankFactory)
+    model = classifier.load_classifier(tmp_path, "", lambda _: True)
+    assert built == []
+    for image in (np.zeros(bank.shape), np.eye(bank.shape[0])):
+        expected = gabor.extract_gabor_statistics(image, mask, lg=bank)
+        np.testing.assert_array_equal(model.features(image)[0], expected)
+    assert built == [1]
