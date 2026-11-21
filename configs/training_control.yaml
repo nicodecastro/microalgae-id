@@ -2,8 +2,8 @@
 # Training dataset configuration
 # ==========================
 dataset:
-  parent_groups_csv: "data/reviewed_targets_01/parent_groups.csv"  # Match this mapping to raw_dir.
-  raw_dir: "data/reviewed_targets_01/images"
+  parent_groups_csv: "data/reviewed_targets_02/parent_groups.csv"  # Match this mapping to raw_dir.
+  raw_dir: "data/reviewed_targets_02/images"
   features_dir: "data/features"
   combined_features_dir: "data/combined_features"
   image_format: [".png",".jpg"]
@@ -88,12 +88,12 @@ experiment:
   inner_folds: 5
   random_state: 42
   scoring: "f1_macro"
-  n_jobs: -1
-  refit_full_data: true
+  n_jobs: 4
+  refit_full_data: false
   # param_grids: optional per-model replacement grids; otherwise full Chong grids.
 
 # ==========================
 # Logging
 # ==========================
 logging:
-  save_intermediate_images: true
+  save_intermediate_images: false
