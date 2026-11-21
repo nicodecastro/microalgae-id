@@ -23,7 +23,7 @@ class ImageViewer(QGraphicsView):
         super().__init__(parent)
         self._scene = QGraphicsScene(self)
         self.setScene(self._scene)
-        self.setBackgroundBrush(QColor("#101a30"))
+        self.setBackgroundBrush(QColor("#0f172b"))
         self.setRenderHints(
             QPainter.RenderHint.Antialiasing | QPainter.RenderHint.SmoothPixmapTransform
         )
@@ -40,7 +40,11 @@ class ImageViewer(QGraphicsView):
         self._selected_id: str | None = None
         self._pan_position: QPointF | None = None
 
-    def set_image(self, image: QImage, analysis: ImageAnalysis | None = None) -> None:
+    def set_image(self, image: QImage, analysis: ImageAnalysis | None = None, *, preserve_view: bool = False) -> None:
+        view = None
+        if preserve_view and self._has_image:
+            view = (self.transform(), self.horizontalScrollBar().value(),
+                    self.verticalScrollBar().value(), self._fit_on_resize)
         self._scene.clear()
         self._overlay_items.clear()
         self._selected_id = None
@@ -70,7 +74,14 @@ class ImageViewer(QGraphicsView):
 
         self._update_overlay_style()
         self.set_annotations_visible(self._annotations_visible)
-        self.fit_image()
+        if view is None:
+            self.fit_image()
+        else:
+            transform, horizontal, vertical, self._fit_on_resize = view
+            self.setTransform(transform)
+            self.horizontalScrollBar().setValue(horizontal)
+            self.verticalScrollBar().setValue(vertical)
+            self.zoom_changed.emit(round(self.transform().m11() * 100))
 
     def clear_image(self) -> None:
         self._scene.clear()

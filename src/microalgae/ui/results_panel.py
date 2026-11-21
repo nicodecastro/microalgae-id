@@ -3,7 +3,7 @@
 from collections import Counter
 
 from PySide6.QtCore import Qt, QSize, Signal
-from PySide6.QtWidgets import QLabel, QListWidget, QListWidgetItem, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QVBoxLayout, QWidget
 
 from microalgae.domain.results import ImageAnalysis
 
@@ -20,17 +20,18 @@ class ResultsPanel(QWidget):
         layout.setContentsMargins(18, 20, 18, 18)
         layout.setSpacing(14)
 
+        header = QHBoxLayout()
         title = QLabel("Results")
         title.setObjectName("sectionTitle")
-        layout.addWidget(title)
+        header.addWidget(title)
+        self.prediction_time = QLabel()
+        self.prediction_time.setObjectName("mutedText")
+        self.prediction_time.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.prediction_time.hide()
+        header.addWidget(self.prediction_time, 1)
+        layout.addLayout(header)
 
-        self.demo_badge = QLabel("DEMO DATA · sample results only")
-        self.demo_badge.setObjectName("demoBadge")
-        self.demo_badge.setWordWrap(True)
-        self.demo_badge.hide()
-        layout.addWidget(self.demo_badge)
-
-        self.message = QLabel("Add an image or open the demo to begin.")
+        self.message = QLabel("Add an image to begin.")
         self.message.setWordWrap(True)
         self.message.setObjectName("mutedText")
         layout.addWidget(self.message)
@@ -58,45 +59,50 @@ class ResultsPanel(QWidget):
 
     def set_analysis(self, analysis: ImageAnalysis | None, *, has_image: bool) -> None:
         self.result_list.clear()
-        self.demo_badge.hide()
         self.summary.hide()
         self.distribution.hide()
         self.result_list.hide()
+
+        seconds = analysis.prediction_seconds if analysis is not None else None
+        if seconds is None:
+            self.prediction_time.clear()
+        else:
+            duration = f"{seconds * 1000:.0f} ms" if seconds < 1 else f"{seconds:.2f} s"
+            self.prediction_time.setText(f"Predicted in {duration}")
+        self.prediction_time.setVisible(seconds is not None)
 
         if analysis is None:
             self._layout.setStretchFactor(self.result_list, 0)
             self._layout.setStretch(self._spacer_index, 1)
             self.message.setText(
-                "Analysis is not available yet. This prototype lets you review images "
-                "without classifying them."
+                "Analysis is not available yet. Select Predict current image to analyze this image."
                 if has_image
-                else "Add an image or open the demo to begin."
+                else "Add an image to begin."
             )
             self.message.show()
             return
 
-        is_demo = analysis.source == "demo"
         self._layout.setStretchFactor(self.result_list, 1)
         self._layout.setStretch(self._spacer_index, 0)
-        self.demo_badge.setVisible(is_demo)
-        self.message.hide()
-        counts = Counter(detection.species for detection in analysis.detections)
+        self.message.setTextFormat(Qt.TextFormat.PlainText)
+        self.message.setText(analysis.status)
+        self.message.setVisible(bool(analysis.status))
+        counts = Counter(detection.species for detection in analysis.detections if detection.species)
         probabilities = [
             detection.probability
             for detection in analysis.detections
             if detection.probability is not None
-            and (is_demo or detection.probability_validated)
+            and detection.probability_validated
         ]
         mean_text = (
             f"{sum(probabilities) / len(probabilities):.1%}"
             if probabilities and len(probabilities) == len(analysis.detections)
             else "—"
         )
-        prefix = "Sample " if is_demo else ""
         self.summary.setText(
-            f"{prefix}cells: {len(analysis.detections)}\n"
-            f"{prefix}species: {len(counts)}\n"
-            f"Mean {prefix.lower()}probability: {mean_text}"
+            f"cells: {len(analysis.detections)}\n"
+            f"species: {len(counts)}\n"
+            f"Mean probability: {mean_text}"
         )
         self.summary.show()
         distribution = ", ".join(f"{species} ({count})" for species, count in counts.items())
@@ -104,19 +110,19 @@ class ResultsPanel(QWidget):
         self.distribution.show()
 
         for number, detection in enumerate(analysis.detections, start=1):
-            show_probability = detection.probability is not None and (
-                is_demo or detection.probability_validated
-            )
+            show_probability = detection.probability is not None and detection.probability_validated
             score = (
-                f"{detection.probability:.0%} {'demo ' if is_demo else ''}probability"
+                f"{detection.probability:.0%} probability"
                 if show_probability
                 else "Probability unavailable"
             )
-            item = QListWidgetItem(f"Cell #{number} · {detection.species}\n{score}")
+            label = detection.species or 'No species prediction'
+            detail = detection.status or score
+            item = QListWidgetItem(f"Cell #{number} · {label}\n{detail}")
             item.setData(Qt.ItemDataRole.UserRole, detection.identifier)
             item.setToolTip(
                 f"x={detection.x:g}, y={detection.y:g}, "
-                f"width={detection.width:g}, height={detection.height:g}"
+                f"width={detection.width:g}, height={detection.height:g}\n{detail}"
             )
             item.setSizeHint(QSize(0, 64))
             self.result_list.addItem(item)

@@ -14,14 +14,15 @@ class Detection:
     y: float
     width: float
     height: float
-    species: str
+    species: str | None
     probability: float | None = None
     probability_validated: bool = False
+    status: str = ""
 
     def __post_init__(self) -> None:
         values = (self.x, self.y, self.width, self.height)
-        if not self.identifier or not self.species:
-            raise ValueError("A detection needs an identifier and species label")
+        if not self.identifier or (not self.species and not self.status):
+            raise ValueError("A detection needs an identifier and a species or status")
         if not all(isfinite(value) for value in values):
             raise ValueError("Detection coordinates must be finite")
         if self.x < 0 or self.y < 0 or self.width <= 0 or self.height <= 0:
@@ -34,11 +35,13 @@ class Detection:
 
 @dataclass(frozen=True, slots=True)
 class ImageAnalysis:
-    """Results for one image, with demo output distinguishable from model output."""
+    """Prediction results for one image."""
 
     image_id: str
     detections: tuple[Detection, ...]
-    source: Literal["demo", "model"]
+    source: Literal["model"]
+    status: str = ""
+    prediction_seconds: float | None = None
 
     def __post_init__(self) -> None:
         if not self.image_id:
