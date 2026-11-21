@@ -8,6 +8,9 @@ version = "0.1.0"
 description = "Offline microalgae image review and feature extraction"
 requires-python = ">=3.10"
 
+[project.optional-dependencies]
+yolo = ["ultralytics==8.4.215"]
+
 [tool.setuptools.packages.find]
 where = ["src"]
 
