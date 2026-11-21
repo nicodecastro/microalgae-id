@@ -246,6 +246,7 @@ def evaluate_nested_cv(frame, output_dir, plan, *, progress=None):
         return searcher, selection
 
     summaries = {}
+    report_rows = []
     # Complete *all* outer evaluation before fitting either final pipeline.
     for name in plan.settings["models"]:
         directory = output_dir / name
@@ -273,14 +274,27 @@ def evaluate_nested_cv(frame, output_dir, plan, *, progress=None):
             raise ValueError("Every image must receive exactly one outer-test prediction")
         pd.DataFrame({"image_id": identifiers, "Class": y, "prediction": predictions,
                       "outer_fold": fold_numbers}).to_csv(directory / "oof_predictions.csv", index=False)
-        write_json(directory / "classification_report.json", classification_report(
-            y, predictions, labels=classes, output_dict=True, zero_division=0))
+        species_report = classification_report(
+            y, predictions, labels=classes, output_dict=True, zero_division=0)
+        write_json(directory / "classification_report.json", species_report)
         _save_confusion(y, predictions, classes, directory)
         folds = pd.DataFrame(rows).drop(columns="fold")
         summaries[name] = {
             "outer_fold_summary": {metric: {"mean": folds[metric].mean(), "std_ddof0": folds[metric].std(ddof=0)} for metric in folds},
             "pooled_oof_metrics": _scores(y, predictions, classes),
         }
+        report_row = {"model": name}
+        for metric, stats in summaries[name]["outer_fold_summary"].items():
+            report_row[f"outer_{metric}_mean"] = stats["mean"]
+            report_row[f"outer_{metric}_std_ddof0"] = stats["std_ddof0"]
+            report_row[f"pooled_oof_{metric}"] = summaries[name]["pooled_oof_metrics"][metric]
+        for species in classes:
+            scores = species_report[species]
+            report_row[f"{species}_precision"] = scores["precision"]
+            report_row[f"{species}_recall"] = scores["recall"]
+            report_row[f"{species}_f1"] = scores["f1-score"]
+            report_row[f"{species}_support"] = int(scores["support"])
+        report_rows.append(report_row)
         write_json(directory / "summary.json", summaries[name])
         write_json(output_dir / "summary.json", summaries)
 
@@ -298,4 +312,5 @@ def evaluate_nested_cv(frame, output_dir, plan, *, progress=None):
                 "estimator_classes": fitted.best_estimator_.classes_,
                 "training_images": len(y), "library_versions": versions, **selection,
             })
+    pd.DataFrame(report_rows).to_csv(output_dir / "metrics_summary.csv", index=False)
     return summaries
