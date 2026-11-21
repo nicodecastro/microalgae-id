@@ -161,8 +161,12 @@ def test_desktop_draw_edit_save_resume_and_keep_zoom(qtbot, session):
     qtbot.addWidget(window)
     window.show()
     qtbot.waitUntil(lambda: window.viewer.viewport().width() > 100)
-    window.draw_action.setChecked(True)
     view = window.viewer
+    window.activateWindow()
+    view.setFocus()
+    qtbot.waitUntil(window.isActiveWindow)
+    qtbot.keyClick(view, Qt.Key.Key_D)
+    assert view.drawing
     start = view.mapFromScene(QPointF(20, 25))
     end = view.mapFromScene(QPointF(95, 60))
     qtbot.mousePress(view.viewport(), Qt.MouseButton.LeftButton, pos=end)
@@ -184,6 +188,63 @@ def test_desktop_draw_edit_save_resume_and_keep_zoom(qtbot, session):
     window.empty.setChecked(True)
     window.review_next()
     assert DetectionSession(session.directory).data["images"][1]["empty_confirmed"]
+
+
+def test_crop_review_shortcuts_in_detection_window(qtbot, session, monkeypatch):
+    window = DetectionWindow(session)
+    monkeypatch.setattr(window, "can_leave", lambda: True)
+    qtbot.addWidget(window)
+    window.show()
+    window.activateWindow()
+    view = window.viewer
+    view.setFocus()
+    qtbot.waitUntil(window.isActiveWindow)
+    window.add_box([5, 5, 25, 25])
+    window.add_box([30, 30, 60, 60])
+
+    window.object_notes.setText("first edit")
+    window.object_changed()
+    qtbot.keyClick(view, Qt.Key.Key_CapsLock)
+    assert window.objects.currentRow() == 0
+    assert not window.preview.pixmap().isNull()
+    qtbot.keyClick(view, Qt.Key.Key_CapsLock)
+    assert window.objects.currentRow() == 1
+    assert window.object_notes.text() == "first edit"
+    obj = window.row["objects"][1]
+    qtbot.keyClick(view, Qt.Key.Key_N)
+    qtbot.keyClick(view, Qt.Key.Key_U)
+    assert window.row["objects"][1]["species"] == "other_alga"
+    assert window.row["objects"][1]["uncertain"]
+    qtbot.keyClick(view, Qt.Key.Key_A)
+    assert not window.row["objects"][1]["uncertain"]
+    qtbot.keyClick(view, Qt.Key.Key_B)
+    assert view.drawing
+    qtbot.keyClick(view, Qt.Key.Key_Escape)
+    assert not view.drawing
+    assert window.row["objects"][1]["box"] == [30, 30, 60, 60]
+    qtbot.keyClick(view, Qt.Key.Key_B)
+    view.box_drawn.emit([32, 32, 64, 64])
+    assert not view.drawing
+    assert len(window.row["objects"]) == 2
+    assert window.row["objects"][1] == {
+        **obj, "box": [32, 32, 64, 64], "species": "other_alga",
+    }
+
+    window.object_notes.setFocus()
+    qtbot.keyClicks(window.object_notes, "brand")
+    assert "brand" in window.object_notes.text()
+    assert len(window.row["objects"]) == 2
+    view.setFocus()
+    qtbot.keyClick(view, Qt.Key.Key_CapsLock)
+    qtbot.keyClick(view, Qt.Key.Key_R)
+    assert len(window.row["objects"]) == 1
+    qtbot.keyClick(view, Qt.Key.Key_M)
+    assert session.data["images"][0]["status"] == "reviewed"
+    assert window.index == 0
+    qtbot.keyClick(view, Qt.Key.Key_PageDown)
+    assert window.index == 1
+    qtbot.keyClick(view, Qt.Key.Key_PageUp)
+    assert window.index == 0
 
 
 def test_navigation_cancel_and_discard_preserve_saved_data(qtbot, session, monkeypatch):

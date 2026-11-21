@@ -12,11 +12,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT), str(ROOT / "src")]
 
 import cv2
-from PySide6.QtCore import QRectF, Qt, Signal
-from PySide6.QtGui import QAction, QColor, QFont, QFontDatabase, QImage, QKeySequence, QPen
+from PySide6.QtCore import QEvent, QRectF, Qt, Signal
+from PySide6.QtGui import QAction, QColor, QFont, QFontDatabase, QImage, QKeySequence, QPen, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout,
-    QGraphicsSimpleTextItem, QLabel, QLineEdit, QListWidget,
+    QGraphicsSimpleTextItem, QHBoxLayout, QLabel, QLineEdit, QListWidget,
     QMainWindow, QMessageBox, QPushButton, QSpinBox, QSplitter, QToolBar,
     QVBoxLayout, QWidget,
 )
@@ -109,6 +109,7 @@ class DetectionWindow(QMainWindow):
         self.index = next((i for i, row in enumerate(session.data["images"]) if row["status"] != "reviewed"), 0)
         self.dirty = False
         self.updating = False
+        self.redraw_index = None
         self.setWindowTitle("MicroalgaeID · Detection references")
         self.resize(1380, 860)
         self.setMinimumSize(1050, 700)
@@ -116,15 +117,10 @@ class DetectionWindow(QMainWindow):
         toolbar.setObjectName("mainToolbar")
         toolbar.setMovable(False)
         self.addToolBar(toolbar)
-        self.draw_action = QAction("Draw boxes", self)
-        self.draw_action.setCheckable(True)
-        self.draw_action.setShortcut(QKeySequence("B"))
-        self.draw_action.toggled.connect(self.set_drawing)
-        toolbar.addAction(self.draw_action)
         self.action(toolbar, "Fit image", "Ctrl+0", lambda: self.viewer.fit_image())
         self.action(toolbar, "Save", "Ctrl+S", self.save)
-        self.action(toolbar, "Previous", "Alt+Left", lambda: self.navigate(self.index - 1))
-        self.action(toolbar, "Next", "Alt+Right", lambda: self.navigate(self.index + 1))
+        self.action(toolbar, "Previous", "PgUp", lambda: self.navigate(self.index - 1), "Alt+Left")
+        self.action(toolbar, "Next", "PgDown", lambda: self.navigate(self.index + 1), "Alt+Right")
         self.action(toolbar, "Export snapshot", "Ctrl+E", self.export)
 
         splitter = QSplitter()
@@ -133,20 +129,20 @@ class DetectionWindow(QMainWindow):
         sidebar.setObjectName("sidePanel")
         sidebar.setMinimumWidth(230)
         left = QVBoxLayout(sidebar)
-        heading = QLabel("Detection reference set")
-        heading.setObjectName("sectionTitle")
-        left.addWidget(heading)
         self.progress = QLabel()
+        self.progress.setObjectName("summaryCard")
         self.progress.setWordWrap(True)
         left.addWidget(self.progress)
+        self.image_status = QLabel()
+        self.image_status.setObjectName("summaryCard")
+        left.addWidget(self.image_status)
         self.images = QListWidget()
         self.images.setAccessibleName("Source images and saved review status")
         self.images.setObjectName("imageList")
+        self.images.setToolTip("Page Up: previous image\nPage Down: next image")
+        self.images.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.images.currentRowChanged.connect(self.navigate)
         left.addWidget(self.images)
-        hint = QLabel("Annotate every identifiable alga.\nKeep each colony intact.\nExclude rulers, text and debris.\n\nFolder names are not object labels.")
-        hint.setWordWrap(True)
-        left.addWidget(hint)
         splitter.addWidget(sidebar)
 
         center = QWidget()
@@ -159,22 +155,28 @@ class DetectionWindow(QMainWindow):
         self.viewer.box_drawn.connect(self.add_box)
         self.viewer.detection_selected.connect(self.select_box)
         layout.addWidget(self.viewer, 1)
-        layout.addWidget(QLabel("B: draw boxes · turn off to select/pan · wheel: zoom · Ctrl+0: fit"))
+        layout.addWidget(QLabel("Wheel: zoom · Drag background: pan · Ctrl+0: fit"))
         splitter.addWidget(center)
 
         panel = QWidget()
         panel.setObjectName("sidePanel")
-        panel.setMinimumWidth(290)
+        panel.setMinimumWidth(350)
         right = QVBoxLayout(panel)
         right.addWidget(QLabel("Objects in this image"))
         self.objects = QListWidget()
         self.objects.setAccessibleName("Cell and colony boxes")
         self.objects.setObjectName("resultList")
-        self.objects.setMaximumHeight(165)
+        self.objects.setToolTip("Caps Lock: next box (wraps to first)")
+        self.objects.setMinimumHeight(84)
         self.objects.currentRowChanged.connect(self.show_object)
-        right.addWidget(self.objects)
-        self.editor = QWidget()
-        form = QFormLayout(self.editor)
+        right.addWidget(self.objects, 1)
+        self.preview = QLabel("Select a box to preview it")
+        self.preview.setAccessibleName("Selected box preview")
+        self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.preview.setObjectName("mutedText")
+        self.preview.setFixedHeight(120)
+        right.addWidget(self.preview)
+        form = QFormLayout()
         self.species = QComboBox()
         self.species.addItems(SPECIES)
         self.kind = QComboBox()
@@ -195,13 +197,28 @@ class DetectionWindow(QMainWindow):
         form.addRow("Uncertain extent / mixed group", self.uncertain)
         form.addRow("Clipped by image edge", self.truncated)
         form.addRow("Object notes", self.object_notes)
-        right.addWidget(self.editor)
+        right.addLayout(form)
+        decisions = QHBoxLayout()
+        right.addLayout(decisions)
+        self.accept_button = self.shortcut_button(decisions, "Accept box", "A", lambda: self.label_box(uncertain=False))
+        self.other_button = self.shortcut_button(decisions, "Other alga", "N", lambda: self.label_box(other=True))
+        self.unsure_button = self.shortcut_button(decisions, "Unsure", "U", lambda: self.label_box(uncertain=True))
+        for button in (self.accept_button, self.other_button, self.unsure_button):
+            button.setMinimumWidth(button.sizeHint().width())
         self.apply_button = QPushButton("Apply object edits")
         self.apply_button.clicked.connect(self.apply_object)
-        right.addWidget(self.apply_button)
-        self.delete_button = QPushButton("Delete selected box")
-        self.delete_button.clicked.connect(self.delete_box)
-        right.addWidget(self.delete_button)
+        edits = QHBoxLayout()
+        right.addLayout(edits)
+        edits.addWidget(self.apply_button)
+        self.delete_button = self.shortcut_button(edits, "Discard box", "R", self.delete_box)
+        drawing = QHBoxLayout()
+        right.addLayout(drawing)
+        self.shortcut_button(drawing, "Draw new box", "D", self.draw)
+        self.redraw_button = self.shortcut_button(drawing, "Redraw box", "B", lambda: self.draw(replace=True))
+        cancel_drawing = QAction(self)
+        cancel_drawing.setShortcut(QKeySequence("Escape"))
+        cancel_drawing.triggered.connect(self.stop_drawing)
+        self.addAction(cancel_drawing)
         review_form = QFormLayout()
         self.review_status = QComboBox()
         self.review_status.addItems(STATUSES)
@@ -214,20 +231,20 @@ class DetectionWindow(QMainWindow):
         review_form.addRow("Partition", self.partition)
         review_form.addRow("No algae visible", self.empty)
         review_form.addRow("Image notes", self.notes)
-        right.addLayout(review_form)
+        left.addLayout(review_form)
         for form, fields in ((form, (self.species, self.kind, *self.coords, self.uncertain, self.truncated, self.object_notes)),
                              (review_form, (self.review_status, self.partition, self.empty, self.notes))):
             for field in fields:
                 label = form.labelForField(field)
                 if label:
                     label.setStyleSheet("QLabel { color: #263650; } QLabel:disabled { color: #53657d; }")
-        complete = QPushButton("Mark reviewed + next")
+        complete = self.shortcut_button(left, "Mark image reviewed", "M", self.review_image)
         complete.setObjectName("primaryButton")
-        complete.clicked.connect(self.review_next)
-        right.addWidget(complete)
-        right.addStretch()
+        next_image = QPushButton("Mark reviewed + next")
+        next_image.clicked.connect(self.review_next)
+        left.addWidget(next_image)
         splitter.addWidget(panel)
-        splitter.setSizes([260, 780, 340])
+        splitter.setSizes([290, 670, 420])
         for widget in (self.species, self.kind):
             widget.currentIndexChanged.connect(self.object_changed)
         for widget in self.coords:
@@ -236,21 +253,59 @@ class DetectionWindow(QMainWindow):
             widget.toggled.connect(self.object_changed)
         self.object_notes.textEdited.connect(self.object_changed)
         self.review_status.currentIndexChanged.connect(self.mark_dirty)
+        self.review_status.currentTextChanged.connect(self.update_image_status)
         self.partition.currentIndexChanged.connect(self.mark_dirty)
         self.empty.toggled.connect(self.mark_dirty)
         self.notes.textEdited.connect(self.mark_dirty)
         self.load()
+        QApplication.instance().installEventFilter(self)
 
-    def action(self, toolbar, text, shortcut, callback):
+    def action(self, toolbar, text, shortcut, callback, *alternates):
         action = QAction(text, self)
-        action.setShortcut(QKeySequence(shortcut))
+        action.setShortcuts([QKeySequence(key) for key in (shortcut, *alternates)])
         action.triggered.connect(callback)
         toolbar.addAction(action)
 
-    def set_drawing(self, enabled):
+    def shortcut_button(self, layout, text, key, callback):
+        button = QPushButton(f"{text} ({key})")
+        button.clicked.connect(callback)
+        layout.addWidget(button)
+        shortcut = QShortcut(QKeySequence(key), self)
+        shortcut.setAutoRepeat(False)
+        shortcut.activated.connect(button.click)
+        return button
+
+    def eventFilter(self, watched, event):
+        if (event.type() == QEvent.Type.KeyPress
+                and event.key() == Qt.Key.Key_CapsLock
+                and isinstance(watched, QWidget)
+                and watched.window() == self):
+            count = self.objects.count()
+            if count and not event.isAutoRepeat():
+                self.objects.setCurrentRow((self.objects.currentRow() + 1) % count)
+            return True
+        return super().eventFilter(watched, event)
+
+    def draw(self, *, replace=False):
+        if not self.apply_object():
+            return
         self.viewer.cancel_drawing()
-        self.viewer.drawing = enabled
-        self.viewer.setCursor(Qt.CursorShape.CrossCursor if enabled else Qt.CursorShape.ArrowCursor)
+        self.redraw_index = self.objects.currentRow() if replace else None
+        self.viewer.drawing = True
+        self.viewer.setCursor(Qt.CursorShape.CrossCursor)
+        self.viewer.setFocus()
+        self.statusBar().showMessage("Drag a tight box around the cell or intact colony. Esc cancels drawing.")
+
+    def stop_drawing(self):
+        if self.viewer.drawing:
+            self.statusBar().clearMessage()
+        self.viewer.cancel_drawing()
+        self.viewer.drawing = False
+        self.viewer.unsetCursor()
+        self.redraw_index = None
+
+    def update_image_status(self, status):
+        self.image_status.setText(f"Current image · {status.capitalize()}")
 
     def mark_dirty(self, *_):
         if not self.updating:
@@ -275,13 +330,14 @@ class DetectionWindow(QMainWindow):
 
     def load(self):
         self.updating = True
-        self.viewer.cancel_drawing()
+        self.stop_drawing()
         self.row = deepcopy(self.session.data["images"][self.index])
         source = self.session.verify_source(self.row)
         rgb = cv2.cvtColor(read_image(source), cv2.COLOR_BGR2RGB)
-        image = QImage(rgb.data, rgb.shape[1], rgb.shape[0], rgb.strides[0], QImage.Format.Format_RGB888).copy()
-        self.viewer.set_image(image)
+        self.source_image = QImage(rgb.data, rgb.shape[1], rgb.shape[0], rgb.strides[0], QImage.Format.Format_RGB888).copy()
+        self.viewer.set_image(self.source_image)
         self.review_status.setCurrentText(self.row["status"])
+        self.update_image_status(self.row["status"])
         self.partition.setCurrentText(self.row["partition"])
         self.empty.setChecked(self.row["empty_confirmed"])
         self.notes.setText(self.row["notes"])
@@ -304,16 +360,21 @@ class DetectionWindow(QMainWindow):
         self.show_object(selected)
 
     def show_object(self, index):
-        if getattr(self, "object_edits", False) and not self.apply_object():
+        if getattr(self, "object_edits", False):
+            applied = self.apply_object()
             self.objects.blockSignals(True)
-            self.objects.setCurrentRow(self.edit_index)
+            self.objects.setCurrentRow(index if applied else self.edit_index)
             self.objects.blockSignals(False)
-            return
+            if not applied:
+                return
+        if self.redraw_index is not None and index != self.redraw_index:
+            self.stop_drawing()
         previous_updating = self.updating
         self.updating = True
         self.edit_index = index
         enabled = 0 <= index < len(self.row["objects"])
-        for widget in (self.apply_button, self.delete_button, self.species, self.kind,
+        for widget in (self.accept_button, self.other_button, self.unsure_button,
+                       self.apply_button, self.delete_button, self.redraw_button, self.species, self.kind,
                        self.uncertain, self.truncated, self.object_notes, *self.coords):
             widget.setEnabled(enabled)
         selected = None
@@ -327,6 +388,13 @@ class DetectionWindow(QMainWindow):
             self.uncertain.setChecked(obj["uncertain"])
             self.truncated.setChecked(obj["truncated"])
             self.object_notes.setText(obj["notes"])
+            left, top, right, bottom = obj["box"]
+            crop = self.source_image.copy(left, top, right - left, bottom - top)
+            self.preview.setPixmap(QPixmap.fromImage(crop).scaled(
+                270, self.preview.height(), Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation))
+        else:
+            self.preview.setText("Select a box to preview it")
         self.object_edits = False
         self.viewer.refresh_boxes(self.row["objects"], selected)
         self.updating = previous_updating
@@ -338,13 +406,28 @@ class DetectionWindow(QMainWindow):
     def add_box(self, box):
         if not self.apply_object():
             return
-        self.row["objects"].append({"object_id": uuid4().hex, "box": box, "species": "unknown",
-                                    "kind": "cell", "uncertain": False,
-                                    "truncated": box[0] == 0 or box[1] == 0 or box[2] == self.row["width"] or box[3] == self.row["height"], "notes": ""})
+        index = self.redraw_index
+        self.stop_drawing()
+        left, top, right, bottom = box
+        truncated = left == 0 or top == 0 or right == self.row["width"] or bottom == self.row["height"]
+        objects = self.row["objects"]
+        if index is None:
+            index = len(objects)
+            objects.append({"object_id": uuid4().hex, "box": box, "species": "unknown",
+                            "kind": "cell", "uncertain": False, "truncated": truncated, "notes": ""})
+        else:
+            objects[index].update(box=box, truncated=truncated)
         self.empty.setChecked(False)
         self.review_status.setCurrentText("pending")
-        self.refresh_objects(len(self.row["objects"]) - 1)
+        self.refresh_objects(index)
         self.mark_dirty()
+
+    def label_box(self, *, other=False, uncertain=None):
+        if other:
+            self.species.setCurrentText("other_alga")
+        if uncertain is not None:
+            self.uncertain.setChecked(uncertain or self.kind.currentText() == "unresolved_group")
+        self.apply_object()
 
     def apply_object(self, *_):
         if not getattr(self, "object_edits", False):
@@ -366,6 +449,7 @@ class DetectionWindow(QMainWindow):
     def delete_box(self):
         index = self.objects.currentRow()
         if index >= 0:
+            self.stop_drawing()
             self.object_edits = False
             del self.row["objects"][index]
             self.review_status.setCurrentText("pending")
@@ -416,11 +500,15 @@ class DetectionWindow(QMainWindow):
         self.index = index
         self.load()
 
-    def review_next(self):
+    def review_image(self):
         if not self.apply_object():
-            return
+            return False
+        self.stop_drawing()
         self.review_status.setCurrentText("reviewed")
-        if self.save():
+        return self.save()
+
+    def review_next(self):
+        if self.review_image():
             if self.index + 1 < len(self.session.data["images"]):
                 self.navigate(self.index + 1)
             else:
